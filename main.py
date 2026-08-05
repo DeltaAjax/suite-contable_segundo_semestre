@@ -34,7 +34,7 @@ from flujo_efectivo import (
     generar_flujo_directo,
 )
 from pdf_exporter import generar_pdf_estados_financieros
-from excel_exporter import generar_excel_balanza
+from excel_exporter import generar_excel_estados_financieros
 
 
 @dataclass
@@ -295,22 +295,15 @@ def _calcular_y_mostrar():
                 ui.download(pdf_bytes, filename="Estados_Financieros_FACPYA.pdf")
 
             def _descargar_excel():
-                # Formatea los datos capturados de ESF y ERI para pasarlos al generador de Excel
-                datos_excel = []
-                for m in movimientos_esf:
-                    datos_excel.append({
-                        "concepto": m.cuenta.nombre,
-                        "mov_deudor": m.monto_actual if m.monto_actual > 0 else 0,
-                        "mov_acreedor": abs(m.monto_actual) if m.monto_actual < 0 else 0
-                    })
-                for m in movimientos_eri:
-                    datos_excel.append({
-                        "concepto": m.cuenta.nombre,
-                        "mov_deudor": m.monto if m.monto > 0 else 0,
-                        "mov_acreedor": 0
-                    })
-                excel_bytes = generar_excel_balanza(datos_excel, nombre_empresa="Empresa Demo S.A.")
-                ui.download(excel_bytes, filename="Balanza_y_Estados_Financieros.xlsx")
+                excel_bytes = generar_excel_estados_financieros(
+                    esf=resultado_esf,
+                    eri=resultado_eri,
+                    flujo_indirecto=flujo_indirecto,
+                    estado_cambios=estado_cambios,
+                    empresa="Empresa Demo S.A.",
+                    periodo="Del 1 de enero al 31 de diciembre de 2025"
+                )
+                ui.download(excel_bytes, filename="Estados_Financieros_NIF.xlsx")
 
             with ui.row().classes("w-full justify-between items-center mb-4 border-b border-gray-300 pb-2"):
                 ui.label("Reportes Financieros Generados").classes("text-xl font-bold text-red-900")
