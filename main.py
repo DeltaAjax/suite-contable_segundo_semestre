@@ -75,6 +75,26 @@ def _extraer_float(elem) -> float:
         return 0.0
 
 
+def _validar_nombres_duplicados(filas, etiqueta_catalogo: str) -> bool:
+    """
+    Validación simple de UI: evita que el usuario agregue dos subcuentas
+    dinámicas con el mismo nombre exacto dentro del mismo catálogo
+    complementario. No altera cálculos ni estructura de datos, solo
+    bloquea el envío y notifica al usuario.
+    """
+    nombres = [(fila.nombre_input.value or "").strip() for fila in filas]
+    nombres = [n for n in nombres if n]
+    duplicados = sorted({n for n in nombres if nombres.count(n) > 1})
+    if duplicados:
+        ui.notify(
+            f"Nombres duplicados en {etiqueta_catalogo}: {', '.join(duplicados)}. "
+            "Cada subcuenta debe tener un nombre exacto único.",
+            type="negative",
+        )
+        return True
+    return False
+
+
 def _construir_movimientos_esf() -> list[MovimientoESF]:
     movimientos: list[MovimientoESF] = []
     for cuenta in CATALOGO_V3.values():
@@ -170,7 +190,8 @@ def _render_tab_esf(esf: ResultadoESF):
         _agregar_seccion("Capital Ganado", esf.capital_ganado, esf.total_capital_ganado_actual, esf.total_capital_ganado_anterior)
         filas.append({"concepto": "TOTAL CAPITAL CONTABLE", "notas": "", "actual": formatear_moneda(esf.total_capital_contable_actual), "notas2": "", "anterior": formatear_moneda(esf.total_capital_contable_anterior)})
         filas.append({"concepto": "TOTAL PASIVO + CAPITAL", "notas": "", "actual": formatear_moneda(esf.total_pasivo_mas_capital_actual), "notas2": "", "anterior": formatear_moneda(esf.total_pasivo_mas_capital_anterior)})
-        ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+        with ui.element("div").classes("w-full overflow-x-auto"):
+            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
 
 def _render_tab_eri(eri: ResultadoERI):
@@ -202,7 +223,8 @@ def _render_tab_eri(eri: ResultadoERI):
             {"concepto": "Otros Resultados Integrales (ORI)", "monto": formatear_moneda(eri.ori)},
             {"concepto": "Utilidad Integral (21°)", "monto": formatear_moneda(eri.utilidad_integral)},
         ]
-        ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+        with ui.element("div").classes("w-full overflow-x-auto"):
+            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
 
 def _render_tab_flujo(indirecto: ResultadoFlujoEfectivo, directo: ResultadoFlujoEfectivo):
@@ -229,7 +251,8 @@ def _render_tab_flujo(indirecto: ResultadoFlujoEfectivo, directo: ResultadoFlujo
             filas.append({"concepto": "Efectivo Final (real)", "monto": formatear_moneda(resultado.efectivo_final_real)})
             color = "green" if resultado.concilia else "red"
             ui.label(f"¿Concilia? {'SÍ' if resultado.concilia else 'NO'} (diferencia: {formatear_moneda(resultado.diferencia_conciliacion)})").classes(f"text-{color}-700 font-bold")
-            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+            with ui.element("div").classes("w-full overflow-x-auto"):
+                ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
             ui.separator()
 
 
@@ -252,12 +275,18 @@ def _render_tab_capital(ec: EstadoCambiosCapital, esf: ResultadoESF):
             tt = formatear_moneda(f.totales) if f.totales is not None else ""
             concepto = f.concepto.upper() if f.es_encabezado_categoria else f.concepto
             filas.append({"concepto": concepto, "notas": f.notas or "", "contribuido": cc, "ganado": cg, "totales": tt})
-        ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+        with ui.element("div").classes("w-full overflow-x-auto"):
+            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
 
 def _calcular_y_mostrar():
     global resultados_container
-    
+
+    if _validar_nombres_duplicados(filas_capital_dinamico, "Catálogo Complementario 1 (Capital Contable Dinámico)"):
+        return
+    if _validar_nombres_duplicados(filas_subcuentas_dinamicas, "Catálogo Complementario 2 (Subcuentas de Balance)"):
+        return
+
     movimientos_esf = _construir_movimientos_esf()
     movimientos_eri = _construir_movimientos_eri()
     
@@ -358,7 +387,8 @@ NIF_POR_CLASIFICACION_CASCADA: dict[str, list[tuple[str, str]]] = {
 
 
 def _agregar_fila_capital_dinamico():
-    with ui.row().classes("w-full items-center gap-2"):
+    row_container = ui.row().classes("w-full items-center gap-2")
+    with row_container:
         nombre = ui.input(label="Nombre cuenta", value="").classes("w-48")
         actual = ui.number(label="Año Actual", value=0.0, format="%.2f").classes("w-32")
         anterior = ui.number(label="Año Anterior", value=0.0, format="%.2f").classes("w-32")
@@ -368,11 +398,20 @@ def _agregar_fila_capital_dinamico():
             value=SeccionCapital.CAPITAL_CONTRIBUIDO.value,
         ).classes("w-40")
         reductora = ui.checkbox("Reductora", value=False)
-        filas_capital_dinamico.append(CapitalDinamicaRow(nombre, actual, anterior, seccion, reductora))
+        fila = CapitalDinamicaRow(nombre, actual, anterior, seccion, reductora)
+        filas_capital_dinamico.append(fila)
+
+        def _eliminar_fila(fila=fila, contenedor=row_container):
+            if fila in filas_capital_dinamico:
+                filas_capital_dinamico.remove(fila)
+            contenedor.delete()
+
+        ui.button(icon="delete", on_click=_eliminar_fila).props("flat round color=negative dense").classes("ml-2")
 
 
 def _agregar_fila_subcuenta_dinamica():
-    with ui.row().classes("w-full items-center gap-2"):
+    row_container = ui.row().classes("w-full items-center gap-2")
+    with row_container:
         nombre = ui.input(label="Nombre cuenta", value="").classes("w-48")
         actual = ui.number(label="Año Actual", value=0.0, format="%.2f").classes("w-32")
         anterior = ui.number(label="Año Anterior", value=0.0, format="%.2f").classes("w-32")
@@ -395,7 +434,15 @@ def _agregar_fila_subcuenta_dinamica():
                 nif.set_value(opciones[0][0])
                 
         clasificacion.on("update:model-value", _actualizar_nif)
-        filas_subcuentas_dinamicas.append(SubcuentaDinamicaRow(nombre, actual, anterior, clasificacion, nif, complementaria))
+        fila = SubcuentaDinamicaRow(nombre, actual, anterior, clasificacion, nif, complementaria)
+        filas_subcuentas_dinamicas.append(fila)
+
+        def _eliminar_fila(fila=fila, contenedor=row_container):
+            if fila in filas_subcuentas_dinamicas:
+                filas_subcuentas_dinamicas.remove(fila)
+            contenedor.delete()
+
+        ui.button(icon="delete", on_click=_eliminar_fila).props("flat round color=negative dense").classes("ml-2")
 
 
 @ui.page("/")

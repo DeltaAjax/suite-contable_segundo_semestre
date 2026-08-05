@@ -168,28 +168,39 @@ def generar_excel_estados_financieros(esf, eri, flujo_indirecto, estado_cambios,
     ws_eri = wb.create_sheet(title="ERI")
     _encabezado(ws_eri, "ESTADO DE RESULTADOS INTEGRAL", 2)
     
+    # Fórmulas nativas de Excel para los subtotales/totales de la cascada,
+    # replicando EXACTAMENTE la misma suma que hace engine.calcular_eri()
+    # (los montos ya incluyen su signo NIF vía monto_con_signo, por lo que
+    # cada subtotal es una simple suma de las filas que lo componen).
+    # Fila -> concepto: 6 Ventas, 7 Costo de Ventas, 8 Utilidad Bruta,
+    # 9 Gastos de Venta, 10 Gastos de Administración, 11 Gastos Generales,
+    # 12 Utilidad antes de Otros, 13 Otros Productos, 14 Otros Gastos,
+    # 15 Neto Otros Productos/Gastos, 16 Utilidad de Operación,
+    # 17 Productos Financieros, 18 Gastos Financieros, 19 RIF,
+    # 20 Utilidad antes de Impuestos, 21 ISR, 22 PTU,
+    # 23 Impuestos a la Utilidad, 24 Utilidad Neta, 25 ORI, 26 Utilidad Integral
     filas_eri = [
-        ("Ventas", eri.ventas),
-        ("Costo de Ventas", eri.costo_ventas),
-        ("Utilidad Bruta", eri.utilidad_bruta),
-        ("Gastos de Venta", eri.gastos_venta),
-        ("Gastos de Administración", eri.gastos_administracion),
-        ("Gastos Generales", eri.gastos_generales),
-        ("Utilidad antes de Otros", eri.utilidad_antes_otros),
-        ("Otros Productos", eri.otros_productos),
-        ("Otros Gastos", eri.otros_gastos),
-        ("Neto Otros Productos/Gastos", eri.neto_otros_productos_gastos),
-        ("Utilidad de Operación", eri.utilidad_operacion),
-        ("Productos Financieros", eri.productos_financieros),
-        ("Gastos Financieros", eri.gastos_financieros),
-        ("RIF", eri.rif),
-        ("Utilidad antes de Impuestos", eri.utilidad_antes_impuestos),
-        ("ISR", eri.isr),
-        ("PTU", eri.ptu),
-        ("Impuestos a la Utilidad", eri.impuestos_utilidad),
-        ("Utilidad Neta", eri.utilidad_neta),
-        ("Otros Resultados Integrales (ORI)", eri.ori),
-        ("Utilidad Integral", eri.utilidad_integral),
+        ("Ventas", eri.ventas, None),
+        ("Costo de Ventas", eri.costo_ventas, None),
+        ("Utilidad Bruta", eri.utilidad_bruta, "=B6+B7"),
+        ("Gastos de Venta", eri.gastos_venta, None),
+        ("Gastos de Administración", eri.gastos_administracion, None),
+        ("Gastos Generales", eri.gastos_generales, "=B9+B10"),
+        ("Utilidad antes de Otros", eri.utilidad_antes_otros, None),
+        ("Otros Productos", eri.otros_productos, None),
+        ("Otros Gastos", eri.otros_gastos, None),
+        ("Neto Otros Productos/Gastos", eri.neto_otros_productos_gastos, None),
+        ("Utilidad de Operación", eri.utilidad_operacion, "=B12+B15"),
+        ("Productos Financieros", eri.productos_financieros, None),
+        ("Gastos Financieros", eri.gastos_financieros, None),
+        ("RIF", eri.rif, "=B17+B18"),
+        ("Utilidad antes de Impuestos", eri.utilidad_antes_impuestos, None),
+        ("ISR", eri.isr, None),
+        ("PTU", eri.ptu, None),
+        ("Impuestos a la Utilidad", eri.impuestos_utilidad, None),
+        ("Utilidad Neta", eri.utilidad_neta, "=B20+B23"),
+        ("Otros Resultados Integrales (ORI)", eri.ori, None),
+        ("Utilidad Integral", eri.utilidad_integral, "=B24+B25"),
     ]
     
     ws_eri.cell(row=5, column=1, value="Concepto").font = font_bold
@@ -198,10 +209,11 @@ def generar_excel_estados_financieros(esf, eri, flujo_indirecto, estado_cambios,
     ws_eri.cell(row=5, column=2).fill = fill_sub_header
     
     r_idx = 6
-    for concepto, monto in filas_eri:
+    for concepto, monto, formula in filas_eri:
         es_res = "Utilidad" in concepto or "Neto" in concepto or "RIF" in concepto
         ws_eri.cell(row=r_idx, column=1, value=concepto).font = font_bold if es_res else font_normal
-        c_monto = ws_eri.cell(row=r_idx, column=2, value=monto)
+        valor_celda = formula if formula is not None else monto
+        c_monto = ws_eri.cell(row=r_idx, column=2, value=valor_celda)
         c_monto.font = font_bold if es_res else font_normal
         c_monto.number_format = fmt_moneda
         c_monto.border = border_total if es_res else border_thin
