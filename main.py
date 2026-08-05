@@ -1,4 +1,5 @@
 # main.py - Aplicación NiceGUI de Autoevaluación Financiera NIF V3 (Tema FACPYA)
+import os
 from dataclasses import dataclass
 from nicegui import ui
 from catalog import (
@@ -33,6 +34,8 @@ from flujo_efectivo import (
     generar_flujo_directo,
 )
 from pdf_exporter import generar_pdf_estados_financieros
+from excel_exporter import generar_excel_balanza
+
 
 @dataclass
 class CapitalDinamicaRow:
@@ -41,6 +44,7 @@ class CapitalDinamicaRow:
     anterior_input: ui.number
     seccion_select: ui.select
     reductora_check: ui.checkbox
+
 
 @dataclass
 class SubcuentaDinamicaRow:
@@ -51,11 +55,13 @@ class SubcuentaDinamicaRow:
     nif_select: ui.select
     complementaria_check: ui.checkbox
 
+
 filas_capital_dinamico: list[CapitalDinamicaRow] = []
 filas_subcuentas_dinamicas: list[SubcuentaDinamicaRow] = []
 inputs_cuentas_fijas: dict[str, tuple[ui.number, ui.number]] = {}
 
 resultados_container: ui.column | None = None
+
 
 def _extraer_float(elem) -> float:
     try:
@@ -67,6 +73,7 @@ def _extraer_float(elem) -> float:
         return float(val)
     except Exception:
         return 0.0
+
 
 def _construir_movimientos_esf() -> list[MovimientoESF]:
     movimientos: list[MovimientoESF] = []
@@ -112,6 +119,7 @@ def _construir_movimientos_esf() -> list[MovimientoESF]:
             ))
     return movimientos
 
+
 def _construir_movimientos_eri() -> list[MovimientoERI]:
     movimientos: list[MovimientoERI] = []
     for cuenta in CATALOGO_V3.values():
@@ -123,6 +131,7 @@ def _construir_movimientos_eri() -> list[MovimientoERI]:
             if monto != 0.0:
                 movimientos.append(MovimientoERI(cuenta=cuenta, monto=monto))
     return movimientos
+
 
 def _render_tab_esf(esf: ResultadoESF):
     with ui.column().classes("w-full gap-2"):
@@ -163,6 +172,7 @@ def _render_tab_esf(esf: ResultadoESF):
         filas.append({"concepto": "TOTAL PASIVO + CAPITAL", "notas": "", "actual": formatear_moneda(esf.total_pasivo_mas_capital_actual), "notas2": "", "anterior": formatear_moneda(esf.total_pasivo_mas_capital_anterior)})
         ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
+
 def _render_tab_eri(eri: ResultadoERI):
     with ui.column().classes("w-full gap-2"):
         columnas = [
@@ -194,6 +204,7 @@ def _render_tab_eri(eri: ResultadoERI):
         ]
         ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
+
 def _render_tab_flujo(indirecto: ResultadoFlujoEfectivo, directo: ResultadoFlujoEfectivo):
     with ui.column().classes("w-full gap-4"):
         for metodo, resultado in [("INDIRECTO", indirecto), ("DIRECTO", directo)]:
@@ -221,6 +232,7 @@ def _render_tab_flujo(indirecto: ResultadoFlujoEfectivo, directo: ResultadoFlujo
             ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
             ui.separator()
 
+
 def _render_tab_capital(ec: EstadoCambiosCapital, esf: ResultadoESF):
     with ui.column().classes("w-full gap-2"):
         ok, diff = validar_consistencia_con_esf(ec, esf)
@@ -241,6 +253,7 @@ def _render_tab_capital(ec: EstadoCambiosCapital, esf: ResultadoESF):
             concepto = f.concepto.upper() if f.es_encabezado_categoria else f.concepto
             filas.append({"concepto": concepto, "notas": f.notas or "", "contribuido": cc, "ganado": cg, "totales": tt})
         ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+
 
 def _calcular_y_mostrar():
     global resultados_container
@@ -281,9 +294,29 @@ def _calcular_y_mostrar():
                 )
                 ui.download(pdf_bytes, filename="Estados_Financieros_FACPYA.pdf")
 
+            def _descargar_excel():
+                # Formatea los datos capturados de ESF y ERI para pasarlos al generador de Excel
+                datos_excel = []
+                for m in movimientos_esf:
+                    datos_excel.append({
+                        "concepto": m.cuenta.nombre,
+                        "mov_deudor": m.monto_actual if m.monto_actual > 0 else 0,
+                        "mov_acreedor": abs(m.monto_actual) if m.monto_actual < 0 else 0
+                    })
+                for m in movimientos_eri:
+                    datos_excel.append({
+                        "concepto": m.cuenta.nombre,
+                        "mov_deudor": m.monto if m.monto > 0 else 0,
+                        "mov_acreedor": 0
+                    })
+                excel_bytes = generar_excel_balanza(datos_excel, nombre_empresa="Empresa Demo S.A.")
+                ui.download(excel_bytes, filename="Balanza_y_Estados_Financieros.xlsx")
+
             with ui.row().classes("w-full justify-between items-center mb-4 border-b border-gray-300 pb-2"):
                 ui.label("Reportes Financieros Generados").classes("text-xl font-bold text-red-900")
-                ui.button("Descargar PDF (Opcional)", on_click=_descargar_pdf).classes("bg-gray-700 hover:bg-gray-800 text-white font-bold px-4 py-2 rounded")
+                with ui.row().classes("gap-2"):
+                    ui.button("Exportar Excel (.xlsx)", on_click=_descargar_excel, icon="download").classes("bg-green-700 hover:bg-green-800 text-white font-bold px-4 py-2 rounded")
+                    ui.button("Descargar PDF (Opcional)", on_click=_descargar_pdf).classes("bg-gray-700 hover:bg-gray-800 text-white font-bold px-4 py-2 rounded")
 
             tabs = ui.tabs().classes("text-red-900")
             with tabs:
@@ -303,6 +336,7 @@ def _calcular_y_mostrar():
                 with ui.tab_panel(t4):
                     _render_tab_capital(estado_cambios, resultado_esf)
 
+
 def _build_captura_cuentas_fijas():
     for clasif in Clasificacion:
         cuentas = listar_cuentas_por_clasificacion(clasif)
@@ -321,12 +355,14 @@ def _build_captura_cuentas_fijas():
                         inp_anterior.disable()
                     inputs_cuentas_fijas[cuenta.nombre] = (inp_actual, inp_anterior)
 
+
 NIF_POR_CLASIFICACION_CASCADA: dict[str, list[tuple[str, str]]] = {
     Clasificacion.ACTIVO_CIRCULANTE.value: [(n.value[0], n.value[0]) for n in NIFS_POR_CLASIFICACION[Clasificacion.ACTIVO_CIRCULANTE]],
     Clasificacion.ACTIVO_NO_CIRCULANTE.value: [(n.value[0], n.value[0]) for n in NIFS_POR_CLASIFICACION[Clasificacion.ACTIVO_NO_CIRCULANTE]],
     Clasificacion.PASIVO_CORTO_PLAZO.value: [(n.value[0], n.value[0]) for n in NIFS_POR_CLASIFICACION[Clasificacion.PASIVO_CORTO_PLAZO]],
     Clasificacion.PASIVO_LARGO_PLAZO.value: [(n.value[0], n.value[0]) for n in NIFS_POR_CLASIFICACION[Clasificacion.PASIVO_LARGO_PLAZO]],
 }
+
 
 def _agregar_fila_capital_dinamico():
     with ui.row().classes("w-full items-center gap-2"):
@@ -340,6 +376,7 @@ def _agregar_fila_capital_dinamico():
         ).classes("w-40")
         reductora = ui.checkbox("Reductora", value=False)
         filas_capital_dinamico.append(CapitalDinamicaRow(nombre, actual, anterior, seccion, reductora))
+
 
 def _agregar_fila_subcuenta_dinamica():
     with ui.row().classes("w-full items-center gap-2"):
@@ -366,6 +403,7 @@ def _agregar_fila_subcuenta_dinamica():
                 
         clasificacion.on("update:model-value", _actualizar_nif)
         filas_subcuentas_dinamicas.append(SubcuentaDinamicaRow(nombre, actual, anterior, clasificacion, nif, complementaria))
+
 
 @ui.page("/")
 def pagina_principal():
@@ -410,7 +448,6 @@ def pagina_principal():
 
     resultados_container = ui.column().classes("w-full")
 
-import os
 
 if __name__ in {"__main__", "__mp_main__"}:
     port = int(os.environ.get("PORT", 8080))

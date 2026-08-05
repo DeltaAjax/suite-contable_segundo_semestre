@@ -1,2 +1,3 @@
 nicegui
 reportlab
+openpyxl
