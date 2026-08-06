@@ -1,3 +1,4 @@
 nicegui
-reportlab
-openpyxl
+supabase
+gotrue
+postgrest
