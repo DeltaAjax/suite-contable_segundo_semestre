@@ -1,7 +1,9 @@
-# main.py - Aplicación NiceGUI de Autoevaluación Financiera NIF V3 (Tema FACPYA)
+# main.py - Aplicación NiceGUI de Autoevaluación Financiera NIF V3 (Tema FACPYA) + Supabase
 import os
 from dataclasses import dataclass
 from nicegui import ui
+from supabase import create_client, Client
+
 from catalog import (
     CATALOGO_V3,
     Clasificacion,
@@ -36,7 +38,21 @@ from flujo_efectivo import (
 from pdf_exporter import generar_pdf_estados_financieros
 from excel_exporter import generar_excel_estados_financieros
 
+# ==========================================
+# 1. CONFIGURACIÓN E INICIALIZACIÓN SUPABASE
+# ==========================================
+SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "")
 
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("ADVERTENCIA: Las variables de entorno de SUPABASE no están configuradas.")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+# ==========================================
+# 2. ESTRUCTURAS DE DATOS DE LA INTERFAZ
+# ==========================================
 @dataclass
 class CapitalDinamicaRow:
     nombre_input: ui.input
@@ -63,6 +79,60 @@ inputs_cuentas_fijas: dict[str, tuple[ui.number, ui.number]] = {}
 resultados_container: ui.column | None = None
 
 
+# ==========================================
+# 3. FUNCIONES DE BASE DE DATOS (SUPABASE)
+# ==========================================
+def guardar_practica_supabase(empresa: str, periodo: str) -> int | None:
+    """Registra una práctica/evaluación financiera en Supabase."""
+    try:
+        respuesta = supabase.table("practicas").insert({
+            "nombre": f"{empresa} ({periodo})"
+        }).execute()
+        if respuesta.data:
+            return respuesta.data[0]["id"]
+    except Exception as e:
+        ui.notify(f"Error al guardar práctica en Supabase: {str(e)}", type="negative")
+    return None
+
+
+def guardar_movimientos_supabase(practica_id: int, movimientos_esf: list[MovimientoESF], movimientos_eri: list[MovimientoERI]):
+    """Guarda todos los saldos/movimientos de la autoevaluación en Supabase."""
+    registros = []
+    
+    for mov in movimientos_esf:
+        registros.append({
+            "practica_id": practica_id,
+            "concepto": mov.cuenta.nombre,
+            "monto": mov.monto_actual,
+            "tipo": "ESF_ACTUAL"
+        })
+        if mov.monto_anterior != 0.0:
+            registros.append({
+                "practica_id": practica_id,
+                "concepto": mov.cuenta.nombre,
+                "monto": mov.monto_anterior,
+                "tipo": "ESF_ANTERIOR"
+            })
+
+    for mov in movimientos_eri:
+        registros.append({
+            "practica_id": practica_id,
+            "concepto": mov.cuenta.nombre,
+            "monto": mov.monto,
+            "tipo": "ERI"
+        })
+
+    if registros:
+        try:
+            supabase.table("movimientos_financieros").insert(registros).execute()
+            ui.notify("Práctica guardada correctamente en la base de datos.", type="positive")
+        except Exception as e:
+            ui.notify(f"Error al guardar movimientos en Supabase: {str(e)}", type="negative")
+
+
+# ==========================================
+# 4. LÓGICA AUXILIAR Y CONSTRUCCIÓN DE DATOS
+# ==========================================
 def _extraer_float(elem) -> float:
     try:
         if elem is None:
@@ -76,12 +146,6 @@ def _extraer_float(elem) -> float:
 
 
 def _validar_nombres_duplicados(filas, etiqueta_catalogo: str) -> bool:
-    """
-    Validación simple de UI: evita que el usuario agregue dos subcuentas
-    dinámicas con el mismo nombre exacto dentro del mismo catálogo
-    complementario. No altera cálculos ni estructura de datos, solo
-    bloquea el envío y notifica al usuario.
-    """
     nombres = [(fila.nombre_input.value or "").strip() for fila in filas]
     nombres = [n for n in nombres if n]
     duplicados = sorted({n for n in nombres if nombres.count(n) > 1})
@@ -153,6 +217,9 @@ def _construir_movimientos_eri() -> list[MovimientoERI]:
     return movimientos
 
 
+# ==========================================
+# 5. RENDERIZADO DE TABLAS Y RESULTADOS
+# ==========================================
 def _render_tab_esf(esf: ResultadoESF):
     with ui.column().classes("w-full gap-2"):
         banner = generar_banner_verificacion(esf)
@@ -279,7 +346,7 @@ def _render_tab_capital(ec: EstadoCambiosCapital, esf: ResultadoESF):
             ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
 
-def _calcular_y_mostrar():
+def _calcular_y_mostrar(empresa_val: str, periodo_val: str):
     global resultados_container
 
     if _validar_nombres_duplicados(filas_capital_dinamico, "Catálogo Complementario 1 (Capital Contable Dinámico)"):
@@ -290,6 +357,12 @@ def _calcular_y_mostrar():
     movimientos_esf = _construir_movimientos_esf()
     movimientos_eri = _construir_movimientos_eri()
     
+    # 1. Guardar en Supabase
+    practica_id = guardar_practica_supabase(empresa_val, periodo_val)
+    if practica_id:
+        guardar_movimientos_supabase(practica_id, movimientos_esf, movimientos_eri)
+
+    # 2. Cálculos NIF
     resultado_eri = calcular_eri(movimientos_eri)
     resultado_esf = calcular_esf(
         movimientos_esf,
@@ -313,8 +386,8 @@ def _calcular_y_mostrar():
             
             def _descargar_pdf():
                 pdf_bytes = generar_pdf_estados_financieros(
-                    empresa="Empresa Demo S.A.",
-                    periodo="Del 1 de enero al 31 de diciembre de 2025",
+                    empresa=empresa_val,
+                    periodo=periodo_val,
                     esf=resultado_esf,
                     eri=resultado_eri,
                     flujo_indirecto=flujo_indirecto,
@@ -329,8 +402,8 @@ def _calcular_y_mostrar():
                     eri=resultado_eri,
                     flujo_indirecto=flujo_indirecto,
                     estado_cambios=estado_cambios,
-                    empresa="Empresa Demo S.A.",
-                    periodo="Del 1 de enero al 31 de diciembre de 2025"
+                    empresa=empresa_val,
+                    periodo=periodo_val
                 )
                 ui.download(excel_bytes, filename="Estados_Financieros_NIF.xlsx")
 
@@ -445,6 +518,9 @@ def _agregar_fila_subcuenta_dinamica():
         ui.button(icon="delete", on_click=_eliminar_fila).props("flat round color=negative dense").classes("ml-2")
 
 
+# ==========================================
+# 6. PÁGINA PRINCIPAL
+# ==========================================
 @ui.page("/")
 def pagina_principal():
     global resultados_container
@@ -457,10 +533,10 @@ def pagina_principal():
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
         ui.label("Datos Generales").classes("text-lg font-bold text-gray-800")
         with ui.row().classes("gap-4"):
-            ui.input(label="Nombre de la empresa", value="Empresa Demo S.A.").classes("w-64")
+            input_empresa = ui.input(label="Nombre de la empresa", value="Empresa Demo S.A.").classes("w-64")
             ui.input(label="Tipo de sociedad", value="S.A. de C.V.").classes("w-40")
         with ui.row().classes("gap-4"):
-            ui.input(label="Periodo actual", value="Del 1 de enero al 31 de diciembre de 2025").classes("w-80")
+            input_periodo = ui.input(label="Periodo actual", value="Del 1 de enero al 31 de diciembre de 2025").classes("w-80")
             ui.input(label="Periodo anterior", value="Al 31 de diciembre de 2024").classes("w-80")
 
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
@@ -484,7 +560,10 @@ def pagina_principal():
         ui.button("+ Agregar cuenta de capital", on_click=_agregar_fila_capital_dinamico).classes("bg-gray-700 text-white")
 
     # Botón principal en Rojo Guinda
-    ui.button("Calcular Estados Financieros", on_click=_calcular_y_mostrar).classes("text-lg bg-red-900 hover:bg-red-800 text-white font-bold my-6 w-full py-3 shadow-lg")
+    ui.button(
+        "Calcular Estados Financieros",
+        on_click=lambda: _calcular_y_mostrar(input_empresa.value, input_periodo.value)
+    ).classes("text-lg bg-red-900 hover:bg-red-800 text-white font-bold my-6 w-full py-3 shadow-lg")
 
     resultados_container = ui.column().classes("w-full")
 
