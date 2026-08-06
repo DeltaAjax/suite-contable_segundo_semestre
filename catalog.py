@@ -107,6 +107,19 @@ class NIF(Enum):
         return self.value[1]
 
 
+# El .value de cada miembro de NIF es la tupla (etiqueta, código), NO solo la
+# etiqueta. Por eso `NIF("Propiedad, planta y equipo")` falla con ValueError:
+# ese string no es un valor válido del Enum (le falta el código). Cualquier
+# UI que solo capture/envíe la etiqueta (p.ej. un ui.select con options de
+# solo texto) debe resolver el Enum a través de este mapeo, no con NIF(...).
+NIF_POR_ETIQUETA: dict[str, NIF] = {n.etiqueta: n for n in NIF}
+
+
+def nif_por_etiqueta(etiqueta: str) -> NIF | None:
+    """Resuelve un miembro de NIF a partir de su etiqueta (texto visible en la UI)."""
+    return NIF_POR_ETIQUETA.get(etiqueta)
+
+
 # ---------------------------------------------------------------------------
 # 2. MODELO DE CUENTA
 # ---------------------------------------------------------------------------

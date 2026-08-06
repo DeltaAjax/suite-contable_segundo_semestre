@@ -14,6 +14,7 @@ from catalog import (
     crear_cuenta_balance_dinamica,
     crear_cuenta_capital_dinamica,
     listar_cuentas_por_clasificacion,
+    nif_por_etiqueta,
 )
 from engine import (
     MovimientoERI,
@@ -194,7 +195,14 @@ def _construir_movimientos_esf() -> list[MovimientoESF]:
         monto_actual = _extraer_float(fila.actual_input)
         monto_anterior = _extraer_float(fila.anterior_input)
         clasificacion = Clasificacion(fila.clasificacion_select.value)
-        nif = NIF(fila.nif_select.value)
+        nif = nif_por_etiqueta(fila.nif_select.value)
+        if nif is None:
+            ui.notify(
+                f"No se pudo determinar el NIF para la subcuenta '{nombre}'. "
+                "Selecciona nuevamente su clasificación y NIF.",
+                type="negative",
+            )
+            continue
         es_complementaria = fila.complementaria_check.value or False
         if monto_actual != 0.0 or monto_anterior != 0.0:
             cuenta_din = crear_cuenta_balance_dinamica(nombre, clasificacion, nif, es_complementaria)
@@ -297,7 +305,7 @@ def _render_tab_eri(eri: ResultadoERI):
 def _render_tab_flujo(indirecto: ResultadoFlujoEfectivo, directo: ResultadoFlujoEfectivo):
     with ui.column().classes("w-full gap-4"):
         for metodo, resultado in [("INDIRECTO", indirecto), ("DIRECTO", directo)]:
-            ui.label(f"Método {metodo}").classes("text-lg font-bold text-red-900")
+            ui.label(f"Método {metodo}").classes("text-lg font-bold text-[#002F6C]")
             columnas = [
                 {"name": "concepto", "label": "Concepto", "field": "concepto", "align": "left"},
                 {"name": "monto", "label": "Monto", "field": "monto", "align": "right"},
@@ -346,7 +354,7 @@ def _render_tab_capital(ec: EstadoCambiosCapital, esf: ResultadoESF):
             ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
 
-def _calcular_y_mostrar(empresa_val: str, periodo_val: str):
+def _calcular_y_mostrar(empresa_val: str, periodo_val: str, elaboro_val: str = "", catedratico_val: str = ""):
     global resultados_container
 
     if _validar_nombres_duplicados(filas_capital_dinamico, "Catálogo Complementario 1 (Capital Contable Dinámico)"):
@@ -408,12 +416,12 @@ def _calcular_y_mostrar(empresa_val: str, periodo_val: str):
                 ui.download(excel_bytes, filename="Estados_Financieros_NIF.xlsx")
 
             with ui.row().classes("w-full justify-between items-center mb-4 border-b border-gray-300 pb-2"):
-                ui.label("Reportes Financieros Generados").classes("text-xl font-bold text-red-900")
+                ui.label("Reportes Financieros Generados").classes("text-xl font-bold text-[#002F6C]")
                 with ui.row().classes("gap-2"):
                     ui.button("Exportar Excel (.xlsx)", on_click=_descargar_excel, icon="download").classes("bg-green-700 hover:bg-green-800 text-white font-bold px-4 py-2 rounded")
                     ui.button("Descargar PDF (Opcional)", on_click=_descargar_pdf).classes("bg-gray-700 hover:bg-gray-800 text-white font-bold px-4 py-2 rounded")
 
-            tabs = ui.tabs().classes("text-red-900")
+            tabs = ui.tabs().classes("text-[#002F6C]").props('indicator-color=amber-9 active-color="#002F6C"')
             with tabs:
                 t1 = ui.tab("ESF")
                 t2 = ui.tab("ERI")
@@ -431,14 +439,22 @@ def _calcular_y_mostrar(empresa_val: str, periodo_val: str):
                 with ui.tab_panel(t4):
                     _render_tab_capital(estado_cambios, resultado_esf)
 
+            # Elaboró (Alumno) / Catedrático — cierre académico del reporte
+            with ui.row().classes(
+                "w-full justify-between items-center mt-6 pt-3 border-t-2 border-[#F2A900] "
+                "text-sm text-gray-700"
+            ):
+                ui.label(f"Elaboró (Alumno): {elaboro_val or '—'}").classes("font-medium")
+                ui.label(f"Catedrático / Maestro: {catedratico_val or '—'}").classes("font-medium")
+
 
 def _build_captura_cuentas_fijas():
     for clasif in Clasificacion:
         cuentas = listar_cuentas_por_clasificacion(clasif)
         if not cuentas:
             continue
-        with ui.card().classes("w-full border-l-4 border-red-900"):
-            ui.label(clasif.value).classes("text-md font-bold text-red-900")
+        with ui.card().classes("w-full border-l-4 border-[#002F6C]"):
+            ui.label(clasif.value).classes("text-md font-bold text-[#002F6C]")
             for cuenta in cuentas:
                 with ui.row().classes("w-full items-center gap-4"):
                     ui.label(cuenta.nombre).classes("w-64 text-sm text-gray-700")
@@ -524,9 +540,21 @@ def _agregar_fila_subcuenta_dinamica():
 @ui.page("/")
 def pagina_principal():
     global resultados_container
-    
+
+    # Membrete institucional UANL / FACPYA (discreto, arriba del dashboard)
+    with ui.row().classes(
+        "w-full bg-white text-[#002F6C] px-4 py-1 items-center justify-center "
+        "border-b-2 border-[#F2A900]"
+    ):
+        ui.label(
+            "UNIVERSIDAD AUTÓNOMA DE NUEVO LEÓN | FACULTAD DE CONTADURÍA PÚBLICA Y ADMINISTRACIÓN"
+        ).classes("text-xs md:text-sm font-semibold tracking-wide text-center")
+
     # Encabezado principal FACPYA
-    with ui.row().classes("w-full bg-red-900 text-white p-4 rounded mb-6 items-center justify-between shadow-md"):
+    with ui.row().classes(
+        "w-full bg-[#002F6C] text-white p-4 mb-6 items-center justify-between "
+        "shadow-md border-b-4 border-[#F2A900]"
+    ):
         ui.label("SuiteContable NIF V3 — FACPYA").classes("text-2xl font-bold")
         ui.label("Autoevaluación Financiera").classes("text-md opacity-80")
     
@@ -559,11 +587,19 @@ def pagina_principal():
             _agregar_fila_capital_dinamico()
         ui.button("+ Agregar cuenta de capital", on_click=_agregar_fila_capital_dinamico).classes("bg-gray-700 text-white")
 
-    # Botón principal en Rojo Guinda
+    with ui.card().classes("w-full mb-4 border-l-4 border-[#F2A900]"):
+        ui.label("Datos Académicos").classes("text-lg font-bold text-[#002F6C]")
+        with ui.row().classes("gap-4"):
+            input_elaboro = ui.input(label="Elaboró (Alumno)", value="").classes("w-64")
+            input_catedratico = ui.input(label="Catedrático / Maestro", value="").classes("w-64")
+
+    # Botón principal FACPYA (Azul marino con acento en Oro)
     ui.button(
         "Calcular Estados Financieros",
-        on_click=lambda: _calcular_y_mostrar(input_empresa.value, input_periodo.value)
-    ).classes("text-lg bg-red-900 hover:bg-red-800 text-white font-bold my-6 w-full py-3 shadow-lg")
+        on_click=lambda: _calcular_y_mostrar(
+            input_empresa.value, input_periodo.value, input_elaboro.value, input_catedratico.value
+        )
+    ).classes("text-lg bg-[#002F6C] hover:bg-[#013a85] text-white font-bold my-6 w-full py-3 shadow-lg border-b-4 border-[#F2A900]")
 
     resultados_container = ui.column().classes("w-full")
 
