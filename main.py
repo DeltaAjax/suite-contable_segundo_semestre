@@ -1,7 +1,7 @@
 """
 main.py — Interfaz Unificada (NiceGUI) con persistencia y exportación
 Herramienta de Autoevaluación Financiera (FACPYA — UANL)
-Hito 4: Integración de Auditoría NIF C-6 (Depreciación) y C-19 (Amortización)
+Hito 4: Módulo de Auditoría NIF C-6 y C-19 Independiente
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ from amortizacion import (
 )
 
 # ---------------------------------------------------------------------------
-# Identidad institucional
+# Identidad institucional y Modos
 # ---------------------------------------------------------------------------
 COLOR_GUINDA = "#800000"
 COLOR_GUINDA_OSCURO = "#600000"
@@ -83,10 +83,8 @@ COLOR_DORADO = "#F2A900"
 
 MODO_SIMPLE = "1er Semestre — Modo Simplificado"
 MODO_AVANZADO = "NIF V3 — Suite Profesional"
+MODO_AUDITORIA = "Auditoría NIF — Calculadoras (C-6 / C-19)"
 
-# ---------------------------------------------------------------------------
-# Constantes compartidas
-# ---------------------------------------------------------------------------
 LINEAS_CAPTURA_ERI: list[LineaERI] = [
     LineaERI.VENTAS,
     LineaERI.COSTO_VENTAS,
@@ -116,9 +114,6 @@ def listar_cuentas_simplificadas(grupo_valor: str) -> list[Cuenta]:
     return [c for c in listar_cuentas_por_grupo(grupo_valor) if c.es_simplificada]
 
 
-# ---------------------------------------------------------------------------
-# Estructuras auxiliares – filas dinámicas (modo avanzado)
-# ---------------------------------------------------------------------------
 @dataclass
 class CapitalDinamicaRow:
     nombre_input: ui.input
@@ -150,7 +145,7 @@ class EstadoSesion:
     def __init__(self) -> None:
         self.modo: str = MODO_SIMPLE
 
-        # Modo simplificado (1er semestre)
+        # Modo simplificado
         self.campos_eri: dict[str, ui.number] = {}
         self.subtotales_eri: dict[str, ui.number] = {}
         self.campos_esf_predeterminados: dict[str, ui.number] = {}
@@ -163,7 +158,7 @@ class EstadoSesion:
         self.contenedor_informe_esf: ui.row | None = None
         self.banner_simple: ui.label | None = None
 
-        # Modo avanzado (NIF V3)
+        # Modo avanzado
         self.inputs_cuentas_fijas: dict[str, tuple[ui.number, ui.number]] = {}
         self.filas_capital_dinamico: list[CapitalDinamicaRow] = []
         self.filas_subcuentas_dinamicas: list[SubcuentaDinamicaRow] = []
@@ -175,7 +170,7 @@ class EstadoSesion:
         self.input_elaboro_ref: ui.input | None = None
         self.input_catedratico_ref: ui.input | None = None
 
-        # Almacenamiento de resultados calculados
+        # Resultados calculados
         self.ultimo_esf: ResultadoESF | None = None
         self.ultimo_eri: ResultadoERI | None = None
         self.ultimo_flujo_indirecto: ResultadoFlujoEfectivo | None = None
@@ -201,7 +196,6 @@ class EstadoSesion:
             if monto:
                 cuenta = obtener_cuenta_por_linea_eri(linea)
                 if cuenta is None:
-                    ui.notify(f"No se encontró cuenta para '{linea.value}'.", type="negative")
                     continue
                 movimientos.append(MovimientoCuenta(cuenta=cuenta, monto=monto))
         return movimientos
@@ -344,7 +338,7 @@ class EstadoSesion:
 
 
 # ---------------------------------------------------------------------------
-# Cliente Supabase y funciones de persistencia
+# Cliente Supabase y Persistencia
 # ---------------------------------------------------------------------------
 _supabase_client: Client | None = None
 
@@ -397,7 +391,6 @@ def _deserializar_cuenta(data: dict) -> Cuenta:
         return cuenta_eri
 
 def guardar_practica_supabase(estado: EstadoSesion, nombre: str) -> None:
-    """Guarda la práctica actual en Supabase con payload limpio."""
     try:
         supabase = _get_supabase()
         movs_esf = _construir_movimientos_esf_avanzado(estado)
@@ -406,7 +399,6 @@ def guardar_practica_supabase(estado: EstadoSesion, nombre: str) -> None:
         empresa = estado.input_empresa_ref.value if estado.input_empresa_ref else ""
         periodo = estado.input_periodo_ref.value if estado.input_periodo_ref else ""
 
-        # FIX: Se eliminan elaboro y catedratico para evitar el error PGRST204 de Supabase
         data_practica = {
             "nombre": nombre,
             "empresa": empresa,
@@ -455,7 +447,6 @@ def listar_practicas_supabase() -> list[dict]:
         result = supabase.table("practicas").select("*").order("creado_en", desc=True).execute()
         return result.data
     except Exception as e:
-        ui.notify(f"Error al listar prácticas: {str(e)}", type="negative")
         return []
 
 def cargar_practica_supabase(estado: EstadoSesion, practica_id: int) -> None:
@@ -536,7 +527,7 @@ def _refrescar_lista_practicas(estado: EstadoSesion) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Funciones de construcción de movimientos (modo avanzado)
+# Construcción de movimientos Modo Avanzado
 # ---------------------------------------------------------------------------
 def _extraer_float(elem) -> float:
     try:
@@ -554,11 +545,7 @@ def _validar_nombres_duplicados(filas, etiqueta_catalogo: str) -> bool:
     nombres = [n for n in nombres if n]
     duplicados = sorted({n for n in nombres if nombres.count(n) > 1})
     if duplicados:
-        ui.notify(
-            f"Nombres duplicados en {etiqueta_catalogo}: {', '.join(duplicados)}. "
-            "Cada subcuenta debe tener un nombre exacto único.",
-            type="negative",
-        )
+        ui.notify(f"Nombres duplicados en {etiqueta_catalogo}: {', '.join(duplicados)}.", type="negative")
         return True
     return False
 
@@ -595,7 +582,6 @@ def _construir_movimientos_esf_avanzado(estado: EstadoSesion) -> list[Movimiento
         clasificacion = Clasificacion(fila.clasificacion_select.value)
         nif = nif_por_etiqueta(fila.nif_select.value)
         if nif is None:
-            ui.notify(f"No se pudo determinar el NIF para '{nombre}'.", type="negative")
             continue
         es_complementaria = fila.complementaria_check.value or False
         if monto_actual != 0.0 or monto_anterior != 0.0:
@@ -713,51 +699,49 @@ def _agregar_fila_subcuenta_dinamica(estado: EstadoSesion, *, nombre: str = "", 
 
 
 # ---------------------------------------------------------------------------
-# Renderizado de pestañas en modo avanzado
+# Renderizado de Reportes Financieros
 # ---------------------------------------------------------------------------
 def _render_tab_esf_avanzado(esf: ResultadoESF) -> None:
-    with ui.column().classes("w-full gap-2"):
+    with ui.column().classes("w-full gap-2 my-2"):
         banner = generar_banner_verificacion(esf)
         color = "green" if esf.cuadrado_actual else "red"
-        ui.label(banner).classes(f"text-{color}-700 text-lg font-bold")
+        ui.label(banner).classes(f"text-{color}-700 text-lg font-bold p-2 bg-{color}-50 rounded w-full text-center")
         columnas = [
             {"name": "concepto", "label": "Concepto", "field": "concepto", "align": "left"},
-            {"name": "notas", "label": "Notas", "field": "notas", "align": "center"},
             {"name": "actual", "label": "Año Actual", "field": "actual", "align": "right"},
-            {"name": "notas2", "label": "Notas", "field": "notas2", "align": "center"},
             {"name": "anterior", "label": "Año Anterior", "field": "anterior", "align": "right"},
         ]
         filas = []
 
         def _agregar_seccion(titulo: str, rubros: list, total_act: float, total_ant: float) -> None:
-            filas.append({"concepto": titulo, "notas": "", "actual": "", "notas2": "", "anterior": ""})
+            filas.append({"concepto": f"=== {titulo.upper()} ===", "actual": "", "anterior": ""})
             for r in rubros:
                 filas.append({
                     "concepto": f"  {r.nif.etiqueta}",
-                    "notas": "", "actual": formatear_moneda(r.saldo_actual),
-                    "notas2": "", "anterior": formatear_moneda(r.saldo_anterior),
+                    "actual": formatear_moneda(r.saldo_actual),
+                    "anterior": formatear_moneda(r.saldo_anterior),
                 })
             filas.append({
                 "concepto": f"Total {titulo}",
-                "notas": "", "actual": formatear_moneda(total_act),
-                "notas2": "", "anterior": formatear_moneda(total_ant),
+                "actual": formatear_moneda(total_act),
+                "anterior": formatear_moneda(total_ant),
             })
 
         _agregar_seccion("Activo Circulante", esf.activo_circulante, esf.total_activo_circulante_actual, esf.total_activo_circulante_anterior)
         _agregar_seccion("Activo No Circulante", esf.activo_no_circulante, esf.total_activo_no_circulante_actual, esf.total_activo_no_circulante_anterior)
-        filas.append({"concepto": "TOTAL ACTIVO", "notas": "", "actual": formatear_moneda(esf.total_activo_actual), "notas2": "", "anterior": formatear_moneda(esf.total_activo_anterior)})
+        filas.append({"concepto": ">>> TOTAL ACTIVO <<<", "actual": formatear_moneda(esf.total_activo_actual), "anterior": formatear_moneda(esf.total_activo_anterior)})
         _agregar_seccion("Pasivo a Corto Plazo", esf.pasivo_corto_plazo, esf.total_pasivo_corto_plazo_actual, esf.total_pasivo_corto_plazo_anterior)
         _agregar_seccion("Pasivo a Largo Plazo", esf.pasivo_largo_plazo, esf.total_pasivo_largo_plazo_actual, esf.total_pasivo_largo_plazo_anterior)
-        filas.append({"concepto": "TOTAL PASIVO", "notas": "", "actual": formatear_moneda(esf.total_pasivo_actual), "notas2": "", "anterior": formatear_moneda(esf.total_pasivo_anterior)})
+        filas.append({"concepto": ">>> TOTAL PASIVO <<<", "actual": formatear_moneda(esf.total_pasivo_actual), "anterior": formatear_moneda(esf.total_pasivo_anterior)})
         _agregar_seccion("Capital Contribuido", esf.capital_contribuido, esf.total_capital_contribuido_actual, esf.total_capital_contribuido_anterior)
         _agregar_seccion("Capital Ganado", esf.capital_ganado, esf.total_capital_ganado_actual, esf.total_capital_ganado_anterior)
-        filas.append({"concepto": "TOTAL CAPITAL CONTABLE", "notas": "", "actual": formatear_moneda(esf.total_capital_contable_actual), "notas2": "", "anterior": formatear_moneda(esf.total_capital_contable_anterior)})
-        filas.append({"concepto": "TOTAL PASIVO + CAPITAL", "notas": "", "actual": formatear_moneda(esf.total_pasivo_mas_capital_actual), "notas2": "", "anterior": formatear_moneda(esf.total_pasivo_mas_capital_anterior)})
-        with ui.element("div").classes("w-full overflow-x-auto"):
-            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+        filas.append({"concepto": ">>> TOTAL CAPITAL CONTABLE <<<", "actual": formatear_moneda(esf.total_capital_contable_actual), "anterior": formatear_moneda(esf.total_capital_contable_anterior)})
+        filas.append({"concepto": ">>> TOTAL PASIVO + CAPITAL <<<", "actual": formatear_moneda(esf.total_pasivo_mas_capital_actual), "anterior": formatear_moneda(esf.total_pasivo_mas_capital_anterior)})
+        
+        ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full shadow rounded")
 
 def _render_tab_eri_avanzado(eri: ResultadoERI) -> None:
-    with ui.column().classes("w-full gap-2"):
+    with ui.column().classes("w-full gap-2 my-2"):
         columnas = [
             {"name": "concepto", "label": "Concepto", "field": "concepto", "align": "left"},
             {"name": "monto", "label": "Monto", "field": "monto", "align": "right"},
@@ -765,28 +749,27 @@ def _render_tab_eri_avanzado(eri: ResultadoERI) -> None:
         filas = [
             {"concepto": "Ventas", "monto": formatear_moneda(eri.ventas)},
             {"concepto": "Costo de Ventas", "monto": formatear_moneda(eri.costo_ventas)},
-            {"concepto": "Utilidad Bruta (3°)", "monto": formatear_moneda(eri.utilidad_bruta)},
+            {"concepto": "= Utilidad Bruta (3°)", "monto": formatear_moneda(eri.utilidad_bruta)},
             {"concepto": "Gastos de Venta", "monto": formatear_moneda(eri.gastos_venta)},
             {"concepto": "Gastos de Administración", "monto": formatear_moneda(eri.gastos_administracion)},
-            {"concepto": "Gastos Generales (6°)", "monto": formatear_moneda(eri.gastos_generales)},
-            {"concepto": "Utilidad antes de Otros (7°)", "monto": formatear_moneda(eri.utilidad_antes_otros)},
+            {"concepto": "= Gastos Generales (6°)", "monto": formatear_moneda(eri.gastos_generales)},
+            {"concepto": "= Utilidad antes de Otros (7°)", "monto": formatear_moneda(eri.utilidad_antes_otros)},
             {"concepto": "Otros Productos", "monto": formatear_moneda(eri.otros_productos)},
             {"concepto": "Otros Gastos", "monto": formatear_moneda(eri.otros_gastos)},
-            {"concepto": "Neto Otros Productos/Gastos (10°)", "monto": formatear_moneda(eri.neto_otros_productos_gastos)},
-            {"concepto": "Utilidad de Operación (11°)", "monto": formatear_moneda(eri.utilidad_operacion)},
+            {"concepto": "= Neto Otros Productos/Gastos (10°)", "monto": formatear_moneda(eri.neto_otros_productos_gastos)},
+            {"concepto": "= Utilidad de Operación (11°)", "monto": formatear_moneda(eri.utilidad_operacion)},
             {"concepto": "Productos Financieros", "monto": formatear_moneda(eri.productos_financieros)},
             {"concepto": "Gastos Financieros", "monto": formatear_moneda(eri.gastos_financieros)},
-            {"concepto": "RIF (14°)", "monto": formatear_moneda(eri.rif)},
-            {"concepto": "Utilidad antes de Impuestos (15°)", "monto": formatear_moneda(eri.utilidad_antes_impuestos)},
+            {"concepto": "= RIF (14°)", "monto": formatear_moneda(eri.rif)},
+            {"concepto": "= Utilidad antes de Impuestos (15°)", "monto": formatear_moneda(eri.utilidad_antes_impuestos)},
             {"concepto": "ISR", "monto": formatear_moneda(eri.isr)},
             {"concepto": "PTU", "monto": formatear_moneda(eri.ptu)},
-            {"concepto": "Impuestos a la Utilidad (18°)", "monto": formatear_moneda(eri.impuestos_utilidad)},
-            {"concepto": "Utilidad Neta (19°)", "monto": formatear_moneda(eri.utilidad_neta)},
+            {"concepto": "= Impuestos a la Utilidad (18°)", "monto": formatear_moneda(eri.impuestos_utilidad)},
+            {"concepto": "= Utilidad Neta (19°)", "monto": formatear_moneda(eri.utilidad_neta)},
             {"concepto": "Otros Resultados Integrales (ORI)", "monto": formatear_moneda(eri.ori)},
-            {"concepto": "Utilidad Integral (21°)", "monto": formatear_moneda(eri.utilidad_integral)},
+            {"concepto": "= Utilidad Integral (21°)", "monto": formatear_moneda(eri.utilidad_integral)},
         ]
-        with ui.element("div").classes("w-full overflow-x-auto"):
-            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+        ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full shadow rounded")
 
 def _render_tab_flujo(flujo_indirecto: ResultadoFlujoEfectivo, flujo_directo: ResultadoFlujoEfectivo) -> None:
     def _tabla_flujo(resultado: ResultadoFlujoEfectivo, titulo: str) -> None:
@@ -812,15 +795,14 @@ def _render_tab_flujo(flujo_indirecto: ResultadoFlujoEfectivo, flujo_directo: Re
         filas.append({"concepto": "Incremento de Efectivo", "monto": formatear_moneda(resultado.incremento_efectivo)})
         filas.append({"concepto": "Efectivo Inicial", "monto": formatear_moneda(resultado.efectivo_inicial)})
         filas.append({"concepto": "Efectivo Final (real)", "monto": formatear_moneda(resultado.efectivo_final_real)})
-        with ui.element("div").classes("w-full overflow-x-auto"):
-            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+        ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full shadow rounded")
 
-    with ui.column().classes("w-full gap-4"):
+    with ui.column().classes("w-full gap-4 my-2"):
         _tabla_flujo(flujo_indirecto, "Método Indirecto")
         _tabla_flujo(flujo_directo, "Método Directo")
 
 def _render_tab_capital(estado_cambios: EstadoCambiosCapital) -> None:
-    with ui.column().classes("w-full gap-2"):
+    with ui.column().classes("w-full gap-2 my-2"):
         columnas = [
             {"name": "concepto", "label": "Concepto", "field": "concepto", "align": "left"},
             {"name": "contrib", "label": "Capital Contribuido", "field": "contrib", "align": "right"},
@@ -836,125 +818,133 @@ def _render_tab_capital(estado_cambios: EstadoCambiosCapital) -> None:
                 "ganado": formatear_moneda(f.capital_ganado) if f.capital_ganado is not None else "",
                 "total": formatear_moneda(f.totales) if f.totales is not None else "",
             })
-        with ui.element("div").classes("w-full overflow-x-auto"):
-            ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
+        ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full shadow rounded")
 
 
 # ---------------------------------------------------------------------------
-# AUDITORÍA NIF (Hito 4)
+# MÓDULO DE AUDITORÍA NIF (INDEPENDIENTE)
 # ---------------------------------------------------------------------------
-def build_auditoria_nif() -> None:
-    ui.label("Auditoría de Activos Fijos (NIF C-6) y Pasivos (NIF C-19)").classes("text-sm text-gray-500 mb-4")
+def build_auditoria_nif_independiente() -> None:
+    """Módulo 100% independiente para Auditoría de Activos y Pasivos NIF."""
+    with ui.card().classes("w-full shadow-lg p-6 border-t-4 border-[#800000] mb-8"):
+        ui.label("Módulo de Auditoría Técnica y Cálculos Auxiliares (NIF C-6 y NIF C-19)").classes(
+            f"text-xl font-bold text-[{COLOR_GUINDA}]"
+        )
+        ui.label("Generación autónoma de tablas de depreciación de activos fijos y amortización de pasivos financieros.").classes(
+            "text-sm text-gray-600 mb-4"
+        )
 
-    with ui.tabs().classes("w-full") as tabs:
-        tab_depreciacion = ui.tab("📊 Depreciación (NIF C-6)")
-        tab_amortizacion = ui.tab("💰 Amortización (NIF C-19)")
+        with ui.tabs().classes("w-full") as tabs:
+            tab_depreciacion = ui.tab("📊 Depreciación de Activos Fijos (NIF C-6)")
+            tab_amortizacion = ui.tab("💰 Amortización de Pasivos (NIF C-19)")
 
-    with ui.tab_panels(tabs, value=tab_depreciacion).classes("w-full"):
-        with ui.tab_panel(tab_depreciacion):
-            ui.label("Depreciación de Activos Fijos").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
-            contenedor_resultados_dep = ui.column().classes("w-full mt-2")
+        with ui.tab_panels(tabs, value=tab_depreciacion).classes("w-full mt-4"):
+            # --- TAB DEPRECIACIÓN ---
+            with ui.tab_panel(tab_depreciacion):
+                contenedor_resultados_dep = ui.column().classes("w-full mt-2")
 
-            with ui.card().classes("w-full mb-4"):
-                with ui.row().classes("w-full gap-4"):
-                    concepto_dep = ui.input(label="Concepto del activo", value="Maquinaria Industrial").classes("w-1/3")
-                    costo_dep = ui.number(label="Costo de adquisición", value=100000.0, format="%.2f", min=0).classes("w-1/4")
-                    residual_dep = ui.number(label="Valor residual", value=10000.0, format="%.2f", min=0).classes("w-1/4")
-                    vida_dep = ui.number(label="Vida útil (años)", value=5, format="%.0f", min=1, step=1).classes("w-1/6")
-
-                metodo_dep = ui.select(
-                    label="Método de Depreciación",
-                    options=["Línea Recta", "Suma de Dígitos", "Unidades de Producción", "Saldos Decrecientes"],
-                    value="Línea Recta"
-                ).classes("w-1/3")
-
-                with ui.column().classes("w-full mt-2") as col_unidades:
-                    ui.label("Configuración para Unidades de Producción").classes("font-semibold text-sm")
+                with ui.card().classes("w-full bg-gray-50 border p-4 mb-4"):
+                    ui.label("Parámetros del Activo Fijo").classes("font-bold text-gray-800 text-md mb-2")
                     with ui.row().classes("w-full gap-4"):
-                        capacidad_dep = ui.number(label="Capacidad total", value=100000.0, format="%.2f", min=0).classes("w-1/4")
-                        tipo_unidad_dep = ui.select(
-                            label="Tipo de unidad",
-                            options=["KM", "Unidades", "Horas"],
-                            value="Unidades"
-                        ).classes("w-1/4")
-                        usos_dep = ui.number(
-                            label="Uso anual (KM/Unidades/Horas)",
-                            value=20000.0, format="%.2f", min=0
-                        ).classes("w-1/4")
+                        concepto_dep = ui.input(label="Concepto del activo", value="Maquinaria Industrial").classes("w-1/3 bg-white px-2 rounded")
+                        costo_dep = ui.number(label="Costo de adquisición ($)", value=100000.0, format="%.2f", min=0).classes("w-1/4 bg-white px-2 rounded")
+                        residual_dep = ui.number(label="Valor residual ($)", value=10000.0, format="%.2f", min=0).classes("w-1/4 bg-white px-2 rounded")
+                        vida_dep = ui.number(label="Vida útil (años)", value=5, format="%.0f", min=1, step=1).classes("w-1/6 bg-white px-2 rounded")
 
-                def toggle_unidades(*_) -> None:
-                    col_unidades.set_visibility(metodo_dep.value == "Unidades de Producción")
+                    metodo_dep = ui.select(
+                        label="Método de Depreciación",
+                        options=["Línea Recta", "Suma de Dígitos", "Unidades de Producción", "Saldos Decrecientes"],
+                        value="Línea Recta"
+                    ).classes("w-1/3 bg-white px-2 rounded mt-2")
 
-                metodo_dep.on("update:model-value", toggle_unidades)
-                toggle_unidades()
+                    with ui.column().classes("w-full mt-2") as col_unidades:
+                        ui.label("Configuración para Unidades de Producción").classes("font-semibold text-sm text-gray-700")
+                        with ui.row().classes("w-full gap-4"):
+                            capacidad_dep = ui.number(label="Capacidad total", value=100000.0, format="%.2f", min=0).classes("w-1/4 bg-white px-2 rounded")
+                            tipo_unidad_dep = ui.select(
+                                label="Tipo de unidad",
+                                options=["KM", "Unidades", "Horas"],
+                                value="Unidades"
+                            ).classes("w-1/4 bg-white px-2 rounded")
+                            usos_dep = ui.number(
+                                label="Uso anual promediado",
+                                value=20000.0, format="%.2f", min=0
+                            ).classes("w-1/4 bg-white px-2 rounded")
 
-                ui.button(
-                    "Calcular Tabla de Depreciación",
-                    on_click=lambda: _calcular_depreciacion(
-                        concepto_dep, costo_dep, residual_dep, vida_dep,
-                        metodo_dep, capacidad_dep, tipo_unidad_dep, usos_dep,
-                        contenedor_resultados_dep
-                    )
-                ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-2")
+                    def toggle_unidades(*_) -> None:
+                        col_unidades.set_visibility(metodo_dep.value == "Unidades de Producción")
 
-            with contenedor_resultados_dep:
-                ui.label("Los resultados se mostrarán aquí después de calcular.").classes("text-gray-400 text-sm italic")
+                    metodo_dep.on("update:model-value", toggle_unidades)
+                    toggle_unidades()
 
-        with ui.tab_panel(tab_amortizacion):
-            ui.label("Amortización de Pasivos (NIF C-19)").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
-            contenedor_resultados_amort = ui.column().classes("w-full mt-2")
+                    ui.button(
+                        "Calcular Tabla de Depreciación",
+                        on_click=lambda: _calcular_depreciacion(
+                            concepto_dep, costo_dep, residual_dep, vida_dep,
+                            metodo_dep, capacidad_dep, tipo_unidad_dep, usos_dep,
+                            contenedor_resultados_dep
+                        )
+                    ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-4 px-6 py-2 rounded shadow")
 
-            with ui.card().classes("w-full mb-4"):
-                concepto_amort = ui.input(label="Concepto de la deuda", value="Préstamo Bancario").classes("w-1/2")
+                with contenedor_resultados_dep:
+                    ui.label("Ingresa los datos arriba y presiona 'Calcular Tabla de Depreciación'").classes("text-gray-400 text-sm italic p-4")
 
-                ui.label("Valor de la deuda").classes("font-semibold mt-2")
-                with ui.row().classes("w-full gap-4"):
-                    valor_total_amort = ui.number(label="Valor total directo", value=500000.0, format="%.2f", min=0).classes("w-1/3")
-                    with ui.column().classes("w-1/3"):
-                        unidades_amort = ui.number(label="Unidades", value=100, format="%.0f", min=1, step=1).classes("w-full")
-                        valor_unitario_amort = ui.number(label="Valor unitario", value=5000.0, format="%.2f", min=0).classes("w-full")
-                        monto_calculado_label = ui.label("Monto calculado: $500,000.00").classes("text-sm font-bold text-blue-600")
+            # --- TAB AMORTIZACIÓN ---
+            with ui.tab_panel(tab_amortizacion):
+                contenedor_resultados_amort = ui.column().classes("w-full mt-2")
 
-                        def actualizar_monto_calculado(*_) -> None:
-                            unidades = unidades_amort.value or 0
-                            valor_unit = valor_unitario_amort.value or 0
-                            monto_calc = unidades * valor_unit
-                            monto_calculado_label.text = f"Monto calculado: ${monto_calc:,.2f}"
-                            valor_total_amort.value = monto_calc
+                with ui.card().classes("w-full bg-gray-50 border p-4 mb-4"):
+                    ui.label("Parámetros del Pasivo Financiero").classes("font-bold text-gray-800 text-md mb-2")
+                    concepto_amort = ui.input(label="Concepto de la deuda", value="Préstamo Bancario").classes("w-1/2 bg-white px-2 rounded mb-2")
 
-                        unidades_amort.on("update:model-value", actualizar_monto_calculado)
-                        valor_unitario_amort.on("update:model-value", actualizar_monto_calculado)
-                        actualizar_monto_calculado()
+                    with ui.row().classes("w-full gap-4 items-center"):
+                        valor_total_amort = ui.number(label="Valor total directo ($)", value=500000.0, format="%.2f", min=0).classes("w-1/3 bg-white px-2 rounded")
+                        with ui.column().classes("w-1/3 bg-white p-2 rounded border"):
+                            ui.label("O calcular por Unidades × Precio:").classes("text-xs text-gray-500 font-semibold")
+                            with ui.row().classes("w-full gap-2"):
+                                unidades_amort = ui.number(label="Unidades", value=100, format="%.0f", min=1, step=1).classes("w-1/2")
+                                valor_unitario_amort = ui.number(label="Valor unit.", value=5000.0, format="%.2f", min=0).classes("w-1/2")
+                            monto_calculado_label = ui.label("Monto: $500,000.00").classes("text-xs font-bold text-blue-600")
 
-                ui.separator().classes("my-3")
+                            def actualizar_monto_calculado(*_) -> None:
+                                unidades = unidades_amort.value or 0
+                                valor_unit = valor_unitario_amort.value or 0
+                                monto_calc = unidades * valor_unit
+                                monto_calculado_label.text = f"Monto: ${monto_calc:,.2f}"
+                                valor_total_amort.value = monto_calc
 
-                with ui.row().classes("w-full gap-4"):
-                    tasa_amort = ui.number(label="Tasa de interés anual (%)", value=12.0, format="%.2f", min=0).classes("w-1/5")
-                    pagos_anio_amort = ui.select(
-                        label="Pagos por año",
-                        options={"12": "Mensual (12)", "6": "Bimestral (6)", "4": "Trimestral (4)", "2": "Semestral (2)", "1": "Anual (1)"},
-                        value="12"
-                    ).classes("w-1/5")
-                    plazo_amort = ui.number(label="Plazo (años)", value=5, format="%.0f", min=1, step=1).classes("w-1/5")
-                    gracia_amort = ui.number(label="Periodos de gracia", value=0, format="%.0f", min=0, step=1).classes("w-1/5")
+                            unidades_amort.on("update:model-value", actualizar_monto_calculado)
+                            valor_unitario_amort.on("update:model-value", actualizar_monto_calculado)
 
-                metodo_amort = ui.select(
-                    label="Método de extinción",
-                    options=["Capital Fijo", "Pago al Vencimiento"],
-                    value="Capital Fijo"
-                ).classes("w-1/3")
+                    ui.separator().classes("my-3")
 
-                ui.button(
-                    "Generar Tabla de Amortización",
-                    on_click=lambda: _calcular_amortizacion(
-                        concepto_amort, valor_total_amort, tasa_amort,
-                        pagos_anio_amort, plazo_amort, gracia_amort, metodo_amort,
-                        contenedor_resultados_amort
-                    )
-                ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-2")
+                    with ui.row().classes("w-full gap-4"):
+                        tasa_amort = ui.number(label="Tasa interés anual (%)", value=12.0, format="%.2f", min=0).classes("w-1/5 bg-white px-2 rounded")
+                        pagos_anio_amort = ui.select(
+                            label="Pagos por año",
+                            options={"12": "Mensual (12)", "6": "Bimestral (6)", "4": "Trimestral (4)", "2": "Semestral (2)", "1": "Anual (1)"},
+                            value="12"
+                        ).classes("w-1/5 bg-white px-2 rounded")
+                        plazo_amort = ui.number(label="Plazo (años)", value=5, format="%.0f", min=1, step=1).classes("w-1/5 bg-white px-2 rounded")
+                        gracia_amort = ui.number(label="Periodos de gracia", value=0, format="%.0f", min=0, step=1).classes("w-1/5 bg-white px-2 rounded")
 
-            with contenedor_resultados_amort:
-                ui.label("Los resultados se mostrarán aquí después de calcular.").classes("text-gray-400 text-sm italic")
+                    metodo_amort = ui.select(
+                        label="Método de extinción",
+                        options=["Capital Fijo", "Pago al Vencimiento"],
+                        value="Capital Fijo"
+                    ).classes("w-1/3 bg-white px-2 rounded mt-2")
+
+                    ui.button(
+                        "Generar Tabla de Amortización",
+                        on_click=lambda: _calcular_amortizacion(
+                            concepto_amort, valor_total_amort, tasa_amort,
+                            pagos_anio_amort, plazo_amort, gracia_amort, metodo_amort,
+                            contenedor_resultados_amort
+                        )
+                    ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-4 px-6 py-2 rounded shadow")
+
+                with contenedor_resultados_amort:
+                    ui.label("Ingresa los datos arriba y presiona 'Generar Tabla de Amortización'").classes("text-gray-400 text-sm italic p-4")
 
 
 def _calcular_depreciacion(
@@ -990,26 +980,22 @@ def _calcular_depreciacion(
             cap = capacidad.value or 1
             uso = uso_anual.value or 0
             tipo = tipo_unidad.value or "Unidades"
-            if cap <= 0:
-                ui.notify("La capacidad total debe ser mayor a 0.", type="warning")
-                return
-            if uso <= 0:
-                ui.notify("El uso anual debe ser mayor a 0.", type="warning")
+            if cap <= 0 or uso <= 0:
+                ui.notify("La capacidad y uso deben ser mayores a 0.", type="warning")
                 return
             usos = [uso] * vida_val
             tabla = calcular_unidades_produccion(concepto_val, costo_val, residual_val, vida_val, cap, tipo, usos)
         else:
-            ui.notify(f"Método no soportado: {metodo_val}", type="negative")
             return
 
         contenedor.clear()
         with contenedor:
-            with ui.card().classes("w-full bg-gray-50"):
-                ui.label(f"Tabla de Depreciación - {tabla.concepto}").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
-                with ui.row().classes("w-full justify-between text-sm"):
-                    ui.label(f"Método: {tabla.metodo}")
-                    ui.label(f"Total depreciado: ${tabla.total_depreciado:,.2f}")
-                    ui.label(f"Valor en libros final: ${tabla.valor_libros_final:,.2f}")
+            with ui.card().classes("w-full bg-white shadow p-4 border"):
+                ui.label(f"Tabla de Depreciación — {tabla.concepto}").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
+                with ui.row().classes("w-full justify-between text-sm mb-2"):
+                    ui.label(f"Método: {tabla.metodo}").classes("font-semibold")
+                    ui.label(f"Total depreciado: ${tabla.total_depreciado:,.2f}").classes("font-semibold text-green-700")
+                    ui.label(f"Valor libros final: ${tabla.valor_libros_final:,.2f}").classes("font-semibold text-blue-700")
 
                 columnas = [{"name": str(i), "label": h, "field": str(i), "align": "right" if i > 0 else "left"}
                             for i, h in enumerate(tabla.encabezados)]
@@ -1018,31 +1004,25 @@ def _calcular_depreciacion(
                     row_dict = {}
                     for i, val in enumerate(fila):
                         key = str(i)
-                        if i == 0:
-                            row_dict[key] = val
-                        else:
-                            row_dict[key] = f"${val:,.2f}" if isinstance(val, float) else val
+                        row_dict[key] = val if i == 0 else f"${val:,.2f}" if isinstance(val, float) else val
                     filas_tabla.append(row_dict)
 
-                with ui.element("div").classes("w-full overflow-x-auto"):
-                    ui.table(columns=columnas, rows=filas_tabla, row_key="0").classes("w-full")
+                ui.table(columns=columnas, rows=filas_tabla, row_key="0").classes("w-full mb-4")
 
-                ui.label(tabla.info_extra[0]).classes("text-xs text-gray-500 mt-1")
+                def exportar_dep():
+                    try:
+                        data = exportar_depreciacion_excel(tabla)
+                        ui.download(data, f"Depreciacion_{tabla.concepto}.xlsx")
+                        ui.notify("Excel descargado correctamente", type="positive")
+                    except Exception as e:
+                        ui.notify(f"Error al exportar: {str(e)}", type="negative")
 
-            def exportar_dep():
-                try:
-                    data = exportar_depreciacion_excel(tabla)
-                    ui.download(data, f"Depreciacion_{tabla.concepto}.xlsx")
-                    ui.notify("Excel generado correctamente", type="positive")
-                except Exception as e:
-                    ui.notify(f"Error al exportar: {str(e)}", type="negative")
-
-            ui.button("Exportar a Excel", on_click=exportar_dep, icon="download").classes(
-                "bg-green-700 hover:bg-green-800 text-white font-bold"
-            )
+                ui.button("Exportar Excel (.xlsx)", on_click=exportar_dep, icon="download").classes(
+                    "bg-green-700 hover:bg-green-800 text-white font-bold px-4 py-2 rounded"
+                )
 
     except Exception as e:
-        ui.notify(f"Error al calcular depreciación: {str(e)}", type="negative")
+        ui.notify(f"Error al calcular: {str(e)}", type="negative")
 
 
 def _calcular_amortizacion(
@@ -1077,12 +1057,12 @@ def _calcular_amortizacion(
 
         contenedor.clear()
         with contenedor:
-            with ui.card().classes("w-full bg-gray-50"):
-                ui.label(f"Tabla de Amortización - {tabla.concepto}").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
-                with ui.row().classes("w-full justify-between text-sm"):
-                    ui.label(f"Método: {tabla.metodo}")
-                    ui.label(f"Total intereses: ${tabla.total_intereses:,.2f}")
-                    ui.label(f"Total pagado: ${tabla.total_pagado:,.2f}")
+            with ui.card().classes("w-full bg-white shadow p-4 border"):
+                ui.label(f"Tabla de Amortización — {tabla.concepto}").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
+                with ui.row().classes("w-full justify-between text-sm mb-2"):
+                    ui.label(f"Método: {tabla.metodo}").classes("font-semibold")
+                    ui.label(f"Total intereses: ${tabla.total_intereses:,.2f}").classes("font-semibold text-red-700")
+                    ui.label(f"Total pagado: ${tabla.total_pagado:,.2f}").classes("font-semibold text-blue-700")
 
                 columnas = [{"name": str(i), "label": h, "field": str(i), "align": "right" if i > 0 else "left"}
                             for i, h in enumerate(tabla.encabezados)]
@@ -1094,30 +1074,26 @@ def _calcular_amortizacion(
                         row_dict[key] = val if i == 0 else f"${val:,.2f}" if isinstance(val, float) else val
                     filas_tabla.append(row_dict)
 
-                with ui.element("div").classes("w-full overflow-x-auto"):
-                    ui.table(columns=columnas, rows=filas_tabla, row_key="0").classes("w-full")
+                ui.table(columns=columnas, rows=filas_tabla, row_key="0").classes("w-full mb-4")
 
-                for info in tabla.info_extra:
-                    ui.label(info).classes("text-xs text-gray-500")
+                def exportar_amort():
+                    try:
+                        data = exportar_amortizacion_excel(tabla)
+                        ui.download(data, f"Amortizacion_{tabla.concepto}.xlsx")
+                        ui.notify("Excel descargado correctamente", type="positive")
+                    except Exception as e:
+                        ui.notify(f"Error al exportar: {str(e)}", type="negative")
 
-            def exportar_amort():
-                try:
-                    data = exportar_amortizacion_excel(tabla)
-                    ui.download(data, f"Amortizacion_{tabla.concepto}.xlsx")
-                    ui.notify("Excel generado correctamente", type="positive")
-                except Exception as e:
-                    ui.notify(f"Error al exportar: {str(e)}", type="negative")
-
-            ui.button("Exportar a Excel", on_click=exportar_amort, icon="download").classes(
-                "bg-green-700 hover:bg-green-800 text-white font-bold"
-            )
+                ui.button("Exportar Excel (.xlsx)", on_click=exportar_amort, icon="download").classes(
+                    "bg-green-700 hover:bg-green-800 text-white font-bold px-4 py-2 rounded"
+                )
 
     except Exception as e:
-        ui.notify(f"Error al calcular amortización: {str(e)}", type="negative")
+        ui.notify(f"Error al calcular: {str(e)}", type="negative")
 
 
 # ---------------------------------------------------------------------------
-# Procesamiento y exportación (modo avanzado)
+# Procesamiento de Estados Financieros (Modo Avanzado)
 # ---------------------------------------------------------------------------
 def _procesar_y_mostrar_avanzado(estado: EstadoSesion, empresa_val: str, periodo_val: str,
                                   elaboro_val: str = "", catedratico_val: str = "") -> None:
@@ -1151,52 +1127,50 @@ def _procesar_y_mostrar_avanzado(estado: EstadoSesion, empresa_val: str, periodo
     estado.resultados_container.clear()
     with estado.resultados_container:
         ui.notify(
-            f"Cálculo procesado. Cuentas detectadas: {len(movimientos_esf) + len(movimientos_eri)}",
+            f"Cálculo procesado correctamente. Cuentas con saldo: {len(movimientos_esf) + len(movimientos_eri)}",
             type="positive",
         )
 
-        with ui.row().classes("w-full justify-between items-center mb-4 border-b border-gray-300 pb-2"):
-            ui.label("Reportes Financieros Generados").classes(f"text-xl font-bold text-[{COLOR_GUINDA}]")
-            with ui.row().classes("gap-2"):
-                ui.button("Exportar Excel (.xlsx)", on_click=lambda: _exportar_excel(estado), icon="download").classes(
-                    "bg-green-700 hover:bg-green-800 text-white font-bold px-4 py-2 rounded"
-                )
-                ui.button("Descargar PDF", on_click=lambda: _exportar_pdf(estado), icon="download").classes(
-                    "bg-gray-700 hover:bg-gray-800 text-white font-bold px-4 py-2 rounded"
-                )
+        with ui.card().classes("w-full border-t-4 border-[#800000] p-4 shadow-lg my-4"):
+            with ui.row().classes("w-full justify-between items-center mb-4 border-b pb-2"):
+                ui.label("Reportes Financieros Generados").classes(f"text-xl font-bold text-[{COLOR_GUINDA}]")
+                with ui.row().classes("gap-2"):
+                    ui.button("Exportar Excel (.xlsx)", on_click=lambda: _exportar_excel(estado), icon="download").classes(
+                        "bg-green-700 hover:bg-green-800 text-white font-bold px-4 py-2 rounded shadow"
+                    )
+                    ui.button("Descargar PDF", on_click=lambda: _exportar_pdf(estado), icon="download").classes(
+                        "bg-gray-700 hover:bg-gray-800 text-white font-bold px-4 py-2 rounded shadow"
+                    )
 
-        tabs = ui.tabs().classes(f"text-[{COLOR_GUINDA}]").props(f'indicator-color=amber-9 active-color="{COLOR_GUINDA}"')
-        with tabs:
-            t1 = ui.tab("ESF")
-            t2 = ui.tab("ERI")
-            t3 = ui.tab("Flujo de Efectivo")
-            t4 = ui.tab("Cambios en Capital")
-            t5 = ui.tab("Auditoría NIF (C-6 / C-19)")
+            tabs = ui.tabs().classes(f"text-[{COLOR_GUINDA}] w-full").props(f'indicator-color=amber-9 active-color="{COLOR_GUINDA}"')
+            with tabs:
+                t1 = ui.tab("Estado de Situación Financiera (ESF)")
+                t2 = ui.tab("Estado de Resultado Integral (ERI)")
+                t3 = ui.tab("Flujo de Efectivo")
+                t4 = ui.tab("Estado de Cambios en el Capital")
 
-        with ui.tab_panels(tabs, value=t1).classes("w-full"):
-            with ui.tab_panel(t1):
-                _render_tab_esf_avanzado(resultado_esf)
-            with ui.tab_panel(t2):
-                _render_tab_eri_avanzado(resultado_eri)
-            with ui.tab_panel(t3):
-                _render_tab_flujo(flujo_indirecto, flujo_directo)
-            with ui.tab_panel(t4):
-                _render_tab_capital(estado_cambios)
-            with ui.tab_panel(t5):
-                build_auditoria_nif()
+            with ui.tab_panels(tabs, value=t1).classes("w-full mt-2"):
+                with ui.tab_panel(t1):
+                    _render_tab_esf_avanzado(resultado_esf)
+                with ui.tab_panel(t2):
+                    _render_tab_eri_avanzado(resultado_eri)
+                with ui.tab_panel(t3):
+                    _render_tab_flujo(flujo_indirecto, flujo_directo)
+                with ui.tab_panel(t4):
+                    _render_tab_capital(estado_cambios)
 
-        with ui.row().classes(
-            f"w-full justify-between items-center mt-6 pt-3 border-t-2 border-[{COLOR_DORADO}] "
-            "text-sm text-gray-700"
-        ):
-            ui.label(f"Elaboró (Alumno): {elaboro_val or '—'}").classes("font-medium")
-            ui.label(f"Catedrático / Maestro: {catedratico_val or '—'}").classes("font-medium")
+            with ui.row().classes(
+                f"w-full justify-between items-center mt-6 pt-3 border-t-2 border-[{COLOR_DORADO}] "
+                "text-sm text-gray-700"
+            ):
+                ui.label(f"Elaboró (Alumno): {elaboro_val or '—'}").classes("font-medium")
+                ui.label(f"Catedrático / Maestro: {catedratico_val or '—'}").classes("font-medium")
 
 def _calcular_y_mostrar_avanzado(estado: EstadoSesion, empresa_val: str, periodo_val: str,
                                   elaboro_val: str = "", catedratico_val: str = "") -> None:
-    if _validar_nombres_duplicados(estado.filas_capital_dinamico, "Catálogo Complementario 1 (Capital Contable Dinámico)"):
+    if _validar_nombres_duplicados(estado.filas_capital_dinamico, "Catálogo Complementario 1"):
         return
-    if _validar_nombres_duplicados(estado.filas_subcuentas_dinamicas, "Catálogo Complementario 2 (Subcuentas de Balance)"):
+    if _validar_nombres_duplicados(estado.filas_subcuentas_dinamicas, "Catálogo Complementario 2"):
         return
 
     movimientos_esf = _construir_movimientos_esf_avanzado(estado)
@@ -1223,7 +1197,7 @@ def _exportar_pdf(estado: EstadoSesion) -> None:
             estado_cambios=estado.ultimo_estado_cambios,
         )
         ui.download(pdf_bytes, "Estados_Financieros.pdf")
-        ui.notify("PDF generado correctamente", type="positive")
+        ui.notify("PDF descargado correctamente", type="positive")
     except Exception as e:
         ui.notify(f"Error al generar PDF: {str(e)}", type="negative")
 
@@ -1241,7 +1215,7 @@ def _exportar_excel(estado: EstadoSesion) -> None:
             periodo=estado.ultimo_periodo,
         )
         ui.download(excel_bytes, "Estados_Financieros.xlsx")
-        ui.notify("Excel generado correctamente", type="positive")
+        ui.notify("Excel descargado correctamente", type="positive")
     except Exception as e:
         ui.notify(f"Error al generar Excel: {str(e)}", type="negative")
 
@@ -1259,7 +1233,6 @@ def _construir_membrete() -> None:
         ).classes("text-xs md:text-sm font-semibold tracking-wide text-center")
 
 def _construir_encabezado(estado: EstadoSesion, on_cambio_modo) -> None:
-    # FIX: Se añade z-30 para evitar solapamientos con otros elementos
     with ui.row().classes(
         f"w-full bg-[{COLOR_GUINDA}] text-white p-4 mb-2 items-center justify-between "
         f"shadow-md border-b-4 border-[{COLOR_DORADO}] flex-wrap gap-2 z-30 relative"
@@ -1269,12 +1242,12 @@ def _construir_encabezado(estado: EstadoSesion, on_cambio_modo) -> None:
             ui.label("Estado de Resultado Integral y Estado de Situación Financiera").classes("text-md opacity-80")
 
         with ui.column().classes("items-end gap-1"):
-            ui.label("Modo de Autoevaluación").classes("text-xs font-semibold opacity-90 self-end")
+            ui.label("Modo de Trabajo").classes("text-xs font-semibold opacity-90 self-end")
             ui.select(
-                options=[MODO_SIMPLE, MODO_AVANZADO],
+                options=[MODO_SIMPLE, MODO_AVANZADO, MODO_AUDITORIA],
                 value=estado.modo,
                 on_change=on_cambio_modo,
-            ).props(f'outlined dense bg-color=white color="{COLOR_GUINDA}"').classes("w-72 bg-white rounded shadow")
+            ).props(f'outlined dense bg-color=white color="{COLOR_GUINDA}"').classes("w-80 bg-white rounded shadow")
 
 def build_modo_simplificado(estado: EstadoSesion) -> None:
     ui.label(
@@ -1558,7 +1531,7 @@ def build_modo_avanzado(estado: EstadoSesion) -> None:
         ),
     ).classes(
         f"text-lg bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold my-6 w-full py-3 "
-        f"shadow-lg border-b-4 border-[{COLOR_DORADO}]"
+        f"shadow-lg border-b-4 border-[{COLOR_DORADO}] rounded"
     )
 
     estado.resultados_container = ui.column().classes("w-full")
@@ -1615,7 +1588,6 @@ def _eliminar_practica_ui(estado: EstadoSesion) -> None:
 def pagina_principal() -> None:
     estado = EstadoSesion()
     
-    # 1. Dibujar Membrete
     _construir_membrete()
 
     def renderizar_cuerpo() -> None:
@@ -1623,23 +1595,21 @@ def pagina_principal() -> None:
         with cuerpo:
             if estado.modo == MODO_SIMPLE:
                 build_modo_simplificado(estado)
-            else:
+            elif estado.modo == MODO_AVANZADO:
                 build_modo_avanzado(estado)
+            elif estado.modo == MODO_AUDITORIA:
+                build_auditoria_nif_independiente()
 
     def cambiar_modo(evento) -> None:
         nuevo_modo = evento.value if hasattr(evento, "value") else evento
-        if nuevo_modo not in (MODO_SIMPLE, MODO_AVANZADO):
+        if nuevo_modo not in (MODO_SIMPLE, MODO_AVANZADO, MODO_AUDITORIA):
             return
         estado.modo = nuevo_modo
         renderizar_cuerpo()
 
-    # 2. Dibujar Encabezado (ahora se renderiza ANTES del cuerpo)
     _construir_encabezado(estado, cambiar_modo)
 
-    # 3. Dibujar Contenedor del Cuerpo (con un margen inferior de resguardo)
     cuerpo = ui.column().classes("w-full px-4 max-w-7xl mx-auto mb-16")
-    
-    # 4. Cargar contenido inicial
     renderizar_cuerpo()
 
 ui.run(
