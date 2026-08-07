@@ -58,7 +58,7 @@ from capital_contable import (
 from pdf_exporter import generar_pdf_estados_financieros
 from excel_exporter import generar_excel_estados_financieros
 
-# ===== NUEVOS IMPORTS PARA AUDITORÍA NIF (Hito 4) =====
+# ===== IMPORTS PARA AUDITORÍA NIF (Hito 4) =====
 from depreciacion import (
     calcular_linea_recta,
     calcular_suma_digitos,
@@ -73,7 +73,6 @@ from amortizacion import (
     exportar_amortizacion_excel,
     TablaAmortizacion
 )
-# ===== FIN NUEVOS IMPORTS =====
 
 # ---------------------------------------------------------------------------
 # Identidad institucional
@@ -176,7 +175,7 @@ class EstadoSesion:
         self.input_elaboro_ref: ui.input | None = None
         self.input_catedratico_ref: ui.input | None = None
 
-        # Almacenamiento de resultados calculados (para exportación)
+        # Almacenamiento de resultados calculados
         self.ultimo_esf: ResultadoESF | None = None
         self.ultimo_eri: ResultadoERI | None = None
         self.ultimo_flujo_indirecto: ResultadoFlujoEfectivo | None = None
@@ -192,9 +191,6 @@ class EstadoSesion:
         self.practica_id_actual: int | None = None
         self.practica_nombre_input: ui.input | None = None
 
-    # -------------------------------------------------------------
-    # Construcción de movimientos (modo simplificado)
-    # -------------------------------------------------------------
     def construir_movimientos_eri_simple(self) -> list[MovimientoCuenta]:
         movimientos = []
         for linea in LINEAS_CAPTURA_ERI:
@@ -348,7 +344,7 @@ class EstadoSesion:
 
 
 # ---------------------------------------------------------------------------
-# Cliente Supabase y funciones de persistencia (reales)
+# Cliente Supabase y funciones de persistencia
 # ---------------------------------------------------------------------------
 _supabase_client: Client | None = None
 
@@ -364,7 +360,6 @@ def _get_supabase() -> Client:
     return _supabase_client
 
 def _serializar_cuenta(cuenta: Cuenta) -> dict:
-    """Serializa una cuenta para almacenar en movimientos_financieros."""
     return {
         "nombre": cuenta.nombre,
         "clasificacion": cuenta.clasificacion.value,
@@ -377,14 +372,11 @@ def _serializar_cuenta(cuenta: Cuenta) -> dict:
     }
 
 def _deserializar_cuenta(data: dict) -> Cuenta:
-    """Reconstruye una cuenta a partir de datos serializados."""
-    # Buscar en catálogo unificado primero (cuentas fijas)
     nombre = data["nombre"]
     cuenta = CATALOGO_UNIFICADO.get(nombre)
     if cuenta is not None:
         return cuenta
 
-    # Si no existe, crear cuenta dinámica según tipo
     clasificacion = Clasificacion(data["clasificacion"])
     if data["tipo"] == "ESF":
         if clasificacion == Clasificacion.CAPITAL_CONTABLE:
@@ -397,8 +389,7 @@ def _deserializar_cuenta(data: dict) -> Cuenta:
                 raise ValueError(f"NIF no encontrado para {data['nif_etiqueta']}")
             es_comp = data["es_complementaria"]
             return crear_cuenta_balance_dinamica(nombre, clasificacion, nif, es_comp)
-    else:  # ERI
-        # Para ERI, buscamos la línea
+    else:
         linea = LineaERI(data["linea_eri"])
         cuenta_eri = obtener_cuenta_por_linea_eri(linea)
         if cuenta_eri is None:
@@ -406,31 +397,24 @@ def _deserializar_cuenta(data: dict) -> Cuenta:
         return cuenta_eri
 
 def guardar_practica_supabase(estado: EstadoSesion, nombre: str) -> None:
-    """Guarda la práctica actual en Supabase."""
+    """Guarda la práctica actual en Supabase con payload limpio."""
     try:
         supabase = _get_supabase()
-        # Recolectar movimientos
         movs_esf = _construir_movimientos_esf_avanzado(estado)
         movs_eri = _construir_movimientos_eri_avanzado(estado)
 
-        # Datos generales
         empresa = estado.input_empresa_ref.value if estado.input_empresa_ref else ""
         periodo = estado.input_periodo_ref.value if estado.input_periodo_ref else ""
-        elaboro = estado.input_elaboro_ref.value if estado.input_elaboro_ref else ""
-        catedratico = estado.input_catedratico_ref.value if estado.input_catedratico_ref else ""
 
-        # Insertar en practicas
+        # FIX: Se eliminan elaboro y catedratico para evitar el error PGRST204 de Supabase
         data_practica = {
             "nombre": nombre,
             "empresa": empresa,
             "periodo": periodo,
-            "elaboro": elaboro,
-            "catedratico": catedratico,
         }
         result = supabase.table("practicas").insert(data_practica).execute()
         practica_id = result.data[0]["id"]
 
-        # Insertar movimientos
         for m in movs_esf:
             cuenta_meta = _serializar_cuenta(m.cuenta)
             row = {
@@ -440,7 +424,7 @@ def guardar_practica_supabase(estado: EstadoSesion, nombre: str) -> None:
                 "monto": m.monto_actual,
                 "tipo": "ESF",
                 "nif_clasificacion": m.cuenta.nif.codigo if m.cuenta.nif else None,
-                "metadata": cuenta_meta,  # guardamos toda la info para reconstruir
+                "metadata": cuenta_meta,
                 "monto_anterior": m.monto_anterior,
             }
             supabase.table("movimientos_financieros").insert(row).execute()
@@ -461,7 +445,6 @@ def guardar_practica_supabase(estado: EstadoSesion, nombre: str) -> None:
 
         estado.practica_id_actual = practica_id
         ui.notify(f"Práctica '{nombre}' guardada con ID {practica_id}", type="positive")
-        # Refrescar lista de prácticas
         _refrescar_lista_practicas(estado)
     except Exception as e:
         ui.notify(f"Error al guardar: {str(e)}", type="negative")
@@ -476,66 +459,48 @@ def listar_practicas_supabase() -> list[dict]:
         return []
 
 def cargar_practica_supabase(estado: EstadoSesion, practica_id: int) -> None:
-    """Carga una práctica y rellena el formulario."""
     try:
         supabase = _get_supabase()
-        # Obtener datos de la práctica
         result_p = supabase.table("practicas").select("*").eq("id", practica_id).execute()
         if not result_p.data:
             ui.notify("Práctica no encontrada", type="negative")
             return
         practica = result_p.data[0]
 
-        # Restaurar datos generales
         if estado.input_empresa_ref:
             estado.input_empresa_ref.value = practica.get("empresa", "")
         if estado.input_periodo_ref:
             estado.input_periodo_ref.value = practica.get("periodo", "")
-        if estado.input_elaboro_ref:
-            estado.input_elaboro_ref.value = practica.get("elaboro", "")
-        if estado.input_catedratico_ref:
-            estado.input_catedratico_ref.value = practica.get("catedratico", "")
 
-        # Obtener movimientos
         result_m = supabase.table("movimientos_financieros").select("*").eq("practica_id", practica_id).execute()
         movimientos = result_m.data
 
-        # Limpiar formulario actual
         _reiniciar_formulario_avanzado(estado, mantener_datos_generales=True)
 
-        # Rellenar campos
         for m in movimientos:
             tipo = m["tipo"]
             metadata = m.get("metadata") or {}
-            # Reconstruir cuenta
             cuenta = _deserializar_cuenta(metadata)
             if tipo == "ERI":
-                # Buscar campo de entrada para esta línea
                 for linea in LINEAS_CAPTURA_ERI:
                     if cuenta.linea_eri == linea:
                         campo = estado.campos_eri.get(linea.value)
                         if campo:
                             campo.value = m["monto"]
                         break
-            else:  # ESF
-                # Buscar en cuentas fijas
+            else:
                 if cuenta.nombre in estado.inputs_cuentas_fijas:
                     inp_act, inp_ant = estado.inputs_cuentas_fijas[cuenta.nombre]
                     inp_act.value = m["monto"]
                     inp_ant.value = m.get("monto_anterior", 0.0)
                 else:
-                    # Es una cuenta dinámica: agregar fila
                     if cuenta.clasificacion == Clasificacion.CAPITAL_CONTABLE:
-                        # Capital dinámico
-                        # Determinar sección
                         seccion = cuenta.seccion_capital or SeccionCapital.CAPITAL_CONTRIBUIDO
                         reductora = cuenta.signo == -1
-                        # Agregar fila
                         _agregar_fila_capital_dinamico(estado, nombre=cuenta.nombre,
                                                        actual=m["monto"], anterior=m.get("monto_anterior", 0.0),
                                                        seccion=seccion, reductora=reductora)
                     else:
-                        # Subcuenta de balance
                         nif = cuenta.nif
                         clasif = cuenta.clasificacion
                         comp = cuenta.es_complementaria
@@ -551,9 +516,7 @@ def cargar_practica_supabase(estado: EstadoSesion, practica_id: int) -> None:
 def eliminar_practica_supabase(estado: EstadoSesion, practica_id: int) -> None:
     try:
         supabase = _get_supabase()
-        # Primero eliminar movimientos (cascada)
         supabase.table("movimientos_financieros").delete().eq("practica_id", practica_id).execute()
-        # Luego eliminar práctica
         supabase.table("practicas").delete().eq("id", practica_id).execute()
         ui.notify("Práctica eliminada", type="positive")
         if estado.practica_id_actual == practica_id:
@@ -831,22 +794,21 @@ def _render_tab_flujo(flujo_indirecto: ResultadoFlujoEfectivo, flujo_directo: Re
         columnas = [{"name": "concepto", "label": "Concepto", "field": "concepto", "align": "left"},
                     {"name": "monto", "label": "Monto", "field": "monto", "align": "right"}]
         filas = []
-        # Operación
         filas.append({"concepto": "Actividades de Operación", "monto": ""})
         for f in resultado.filas_operacion:
             filas.append({"concepto": f"  {f.concepto}", "monto": formatear_moneda(f.monto)})
         filas.append({"concepto": "Total Operación", "monto": formatear_moneda(resultado.total_operacion)})
-        # Inversión
+
         filas.append({"concepto": "Actividades de Inversión", "monto": ""})
         for f in resultado.filas_inversion:
             filas.append({"concepto": f"  {f.concepto}", "monto": formatear_moneda(f.monto)})
         filas.append({"concepto": "Total Inversión", "monto": formatear_moneda(resultado.total_inversion)})
-        # Financiamiento
+
         filas.append({"concepto": "Actividades de Financiamiento", "monto": ""})
         for f in resultado.filas_financiamiento:
             filas.append({"concepto": f"  {f.concepto}", "monto": formatear_moneda(f.monto)})
         filas.append({"concepto": "Total Financiamiento", "monto": formatear_moneda(resultado.total_financiamiento)})
-        # Resumen
+
         filas.append({"concepto": "Incremento de Efectivo", "monto": formatear_moneda(resultado.incremento_efectivo)})
         filas.append({"concepto": "Efectivo Inicial", "monto": formatear_moneda(resultado.efectivo_inicial)})
         filas.append({"concepto": "Efectivo Final (real)", "monto": formatear_moneda(resultado.efectivo_final_real)})
@@ -879,24 +841,18 @@ def _render_tab_capital(estado_cambios: EstadoCambiosCapital) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ===== NUEVAS FUNCIONES PARA AUDITORÍA NIF (Hito 4) =====
+# AUDITORÍA NIF (Hito 4)
 # ---------------------------------------------------------------------------
-
 def build_auditoria_nif() -> None:
-    """Construye la pestaña de Auditoría NIF C-6 y C-19."""
-    ui.label(
-        "Auditoría de Activos Fijos (NIF C-6) y Pasivos (NIF C-19)"
-    ).classes("text-sm text-gray-500 mb-4")
+    ui.label("Auditoría de Activos Fijos (NIF C-6) y Pasivos (NIF C-19)").classes("text-sm text-gray-500 mb-4")
 
     with ui.tabs().classes("w-full") as tabs:
         tab_depreciacion = ui.tab("📊 Depreciación (NIF C-6)")
         tab_amortizacion = ui.tab("💰 Amortización (NIF C-19)")
 
     with ui.tab_panels(tabs, value=tab_depreciacion).classes("w-full"):
-        # --- TAB DEPRECIACIÓN ---
         with ui.tab_panel(tab_depreciacion):
             ui.label("Depreciación de Activos Fijos").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
-
             contenedor_resultados_dep = ui.column().classes("w-full mt-2")
 
             with ui.card().classes("w-full mb-4"):
@@ -942,14 +898,10 @@ def build_auditoria_nif() -> None:
                 ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-2")
 
             with contenedor_resultados_dep:
-                ui.label("Los resultados se mostrarán aquí después de calcular.").classes(
-                    "text-gray-400 text-sm italic"
-                )
+                ui.label("Los resultados se mostrarán aquí después de calcular.").classes("text-gray-400 text-sm italic")
 
-        # --- TAB AMORTIZACIÓN ---
         with ui.tab_panel(tab_amortizacion):
             ui.label("Amortización de Pasivos (NIF C-19)").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
-
             contenedor_resultados_amort = ui.column().classes("w-full mt-2")
 
             with ui.card().classes("w-full mb-4"):
@@ -1002,9 +954,7 @@ def build_auditoria_nif() -> None:
                 ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-2")
 
             with contenedor_resultados_amort:
-                ui.label("Los resultados se mostrarán aquí después de calcular.").classes(
-                    "text-gray-400 text-sm italic"
-                )
+                ui.label("Los resultados se mostrarán aquí después de calcular.").classes("text-gray-400 text-sm italic")
 
 
 def _calcular_depreciacion(
@@ -1018,7 +968,6 @@ def _calcular_depreciacion(
     uso_anual: ui.number,
     contenedor: ui.column
 ) -> None:
-    """Ejecuta el cálculo de depreciación y muestra resultados."""
     try:
         costo_val = costo.value or 0
         residual_val = residual.value or 0
@@ -1048,10 +997,7 @@ def _calcular_depreciacion(
                 ui.notify("El uso anual debe ser mayor a 0.", type="warning")
                 return
             usos = [uso] * vida_val
-            tabla = calcular_unidades_produccion(
-                concepto_val, costo_val, residual_val, vida_val,
-                cap, tipo, usos
-            )
+            tabla = calcular_unidades_produccion(concepto_val, costo_val, residual_val, vida_val, cap, tipo, usos)
         else:
             ui.notify(f"Método no soportado: {metodo_val}", type="negative")
             return
@@ -1109,7 +1055,6 @@ def _calcular_amortizacion(
     metodo: ui.select,
     contenedor: ui.column
 ) -> None:
-    """Ejecuta el cálculo de amortización y muestra resultados."""
     try:
         monto_val = valor_total.value or 0
         tasa_val = (tasa.value or 0) / 100
@@ -1126,13 +1071,9 @@ def _calcular_amortizacion(
         tasa_periodica = tasa_val / pagos_anio_val
 
         if metodo.value == "Capital Fijo":
-            tabla = calcular_amortizacion_capital_fijo(
-                concepto_val, monto_val, tasa_periodica, total_pagos, gracia_val
-            )
+            tabla = calcular_amortizacion_capital_fijo(concepto_val, monto_val, tasa_periodica, total_pagos, gracia_val)
         else:
-            tabla = calcular_amortizacion_vencimiento(
-                concepto_val, monto_val, tasa_periodica, total_pagos, gracia_val
-            )
+            tabla = calcular_amortizacion_vencimiento(concepto_val, monto_val, tasa_periodica, total_pagos, gracia_val)
 
         contenedor.clear()
         with contenedor:
@@ -1174,8 +1115,6 @@ def _calcular_amortizacion(
     except Exception as e:
         ui.notify(f"Error al calcular amortización: {str(e)}", type="negative")
 
-# ===== FIN NUEVAS FUNCIONES PARA AUDITORÍA NIF =====
-
 
 # ---------------------------------------------------------------------------
 # Procesamiento y exportación (modo avanzado)
@@ -1192,14 +1131,10 @@ def _procesar_y_mostrar_avanzado(estado: EstadoSesion, empresa_val: str, periodo
         resultado_del_ejercicio_anterior=0.0,
     )
 
-    # Calcular flujo de efectivo (ambos métodos)
     flujo_indirecto = generar_flujo_indirecto(movimientos_esf, resultado_eri.utilidad_integral)
     flujo_directo = generar_flujo_directo(movimientos_esf, resultado_eri.utilidad_integral)
-
-    # Calcular estado de cambios en capital
     estado_cambios = generar_estado_cambios_capital(movimientos_esf, resultado_eri.utilidad_integral)
 
-    # Guardar en estado para exportación
     estado.ultimo_esf = resultado_esf
     estado.ultimo_eri = resultado_eri
     estado.ultimo_flujo_indirecto = flujo_indirecto
@@ -1236,7 +1171,7 @@ def _procesar_y_mostrar_avanzado(estado: EstadoSesion, empresa_val: str, periodo
             t2 = ui.tab("ERI")
             t3 = ui.tab("Flujo de Efectivo")
             t4 = ui.tab("Cambios en Capital")
-            t5 = ui.tab("Auditoría NIF (C-6 / C-19)")   # <-- NUEVA PESTAÑA
+            t5 = ui.tab("Auditoría NIF (C-6 / C-19)")
 
         with ui.tab_panels(tabs, value=t1).classes("w-full"):
             with ui.tab_panel(t1):
@@ -1248,7 +1183,7 @@ def _procesar_y_mostrar_avanzado(estado: EstadoSesion, empresa_val: str, periodo
             with ui.tab_panel(t4):
                 _render_tab_capital(estado_cambios)
             with ui.tab_panel(t5):
-                build_auditoria_nif()   # <-- NUEVA PESTAÑA
+                build_auditoria_nif()
 
         with ui.row().classes(
             f"w-full justify-between items-center mt-6 pt-3 border-t-2 border-[{COLOR_DORADO}] "
@@ -1312,11 +1247,11 @@ def _exportar_excel(estado: EstadoSesion) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Construcción de la UI (header, modo, pestañas, persistencia)
+# UI Layout
 # ---------------------------------------------------------------------------
 def _construir_membrete() -> None:
     with ui.row().classes(
-        "w-full bg-white text-[#800000] px-4 py-1 items-center justify-center "
+        "w-full bg-white text-[#800000] px-4 py-2 items-center justify-center "
         "border-b-2 border-[#F2A900]"
     ):
         ui.label(
@@ -1324,9 +1259,10 @@ def _construir_membrete() -> None:
         ).classes("text-xs md:text-sm font-semibold tracking-wide text-center")
 
 def _construir_encabezado(estado: EstadoSesion, on_cambio_modo) -> None:
+    # FIX: Se añade z-30 para evitar solapamientos con otros elementos
     with ui.row().classes(
         f"w-full bg-[{COLOR_GUINDA}] text-white p-4 mb-2 items-center justify-between "
-        f"shadow-md border-b-4 border-[{COLOR_DORADO}] flex-wrap gap-2"
+        f"shadow-md border-b-4 border-[{COLOR_DORADO}] flex-wrap gap-2 z-30 relative"
     ):
         with ui.column().classes("gap-0"):
             ui.label("Herramienta de Autoevaluación Financiera — FACPYA").classes("text-2xl font-bold")
@@ -1338,7 +1274,7 @@ def _construir_encabezado(estado: EstadoSesion, on_cambio_modo) -> None:
                 options=[MODO_SIMPLE, MODO_AVANZADO],
                 value=estado.modo,
                 on_change=on_cambio_modo,
-            ).props(f'outlined dense bg-color=white color="{COLOR_GUINDA}"').classes("w-72 bg-white rounded")
+            ).props(f'outlined dense bg-color=white color="{COLOR_GUINDA}"').classes("w-72 bg-white rounded shadow")
 
 def build_modo_simplificado(estado: EstadoSesion) -> None:
     ui.label(
@@ -1521,7 +1457,7 @@ def build_modo_avanzado(estado: EstadoSesion) -> None:
     estado.filas_capital_dinamico = []
     estado.filas_subcuentas_dinamicas = []
 
-    # --- Historial de Prácticas (con Supabase real) ---
+    # --- Historial de Prácticas ---
     with ui.card().classes(f"w-full mb-4 border-l-4 border-[{COLOR_DORADO}]"):
         ui.label("Historial de Prácticas").classes(f"text-lg font-bold text-[{COLOR_GUINDA}]")
         with ui.row().classes("w-full items-center gap-2 flex-wrap"):
@@ -1553,7 +1489,7 @@ def build_modo_avanzado(estado: EstadoSesion) -> None:
             ).classes("w-80")
             ui.input(label="Periodo anterior", value="Al 31 de diciembre de 2024").classes("w-80")
 
-    # --- Catálogo de Cuentas Fijo ---
+    # --- Catálogo Fijo ---
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
         ui.label("Catálogo de Cuentas Fijo (NIF V3)").classes("text-lg font-bold text-gray-800")
         for clasif in Clasificacion:
@@ -1571,7 +1507,7 @@ def build_modo_avanzado(estado: EstadoSesion) -> None:
                             inp_anterior.disable()
                         estado.inputs_cuentas_fijas[cuenta.nombre] = (inp_actual, inp_anterior)
 
-    # --- Catálogo Complementario 2: Otras Subcuentas de Balance ---
+    # --- Catálogo Complementario 2 ---
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
         ui.label("Catálogo Complementario 2: Otras Subcuentas de Balance").classes(
             "text-lg font-bold text-gray-800"
@@ -1588,7 +1524,7 @@ def build_modo_avanzado(estado: EstadoSesion) -> None:
         ).classes("bg-gray-700 text-white")
         estado.container_subcuentas_ref = container_subcuentas
 
-    # --- Catálogo Complementario 1: Capital Contable Dinámico ---
+    # --- Catálogo Complementario 1 ---
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
         ui.label("Catálogo Complementario 1: Capital Contable Dinámico").classes(
             "text-lg font-bold text-gray-800"
@@ -1678,8 +1614,9 @@ def _eliminar_practica_ui(estado: EstadoSesion) -> None:
 @ui.page("/")
 def pagina_principal() -> None:
     estado = EstadoSesion()
+    
+    # 1. Dibujar Membrete
     _construir_membrete()
-    cuerpo = ui.column().classes("w-full px-2")
 
     def renderizar_cuerpo() -> None:
         cuerpo.clear()
@@ -1696,7 +1633,13 @@ def pagina_principal() -> None:
         estado.modo = nuevo_modo
         renderizar_cuerpo()
 
+    # 2. Dibujar Encabezado (ahora se renderiza ANTES del cuerpo)
     _construir_encabezado(estado, cambiar_modo)
+
+    # 3. Dibujar Contenedor del Cuerpo (con un margen inferior de resguardo)
+    cuerpo = ui.column().classes("w-full px-4 max-w-7xl mx-auto mb-16")
+    
+    # 4. Cargar contenido inicial
     renderizar_cuerpo()
 
 ui.run(
