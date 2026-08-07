@@ -15,6 +15,7 @@ from catalog import (
     crear_cuenta_capital_dinamica,
     listar_cuentas_por_clasificacion,
     nif_por_etiqueta,
+    obtener_cuenta,
 )
 from engine import (
     MovimientoERI,
@@ -79,6 +80,17 @@ inputs_cuentas_fijas: dict[str, tuple[ui.number, ui.number]] = {}
 
 resultados_container: ui.column | None = None
 
+# --- Estado del historial de prácticas (Supabase) ---
+# practica_id_actual: la práctica que está "activa" en pantalla (None = práctica
+# nueva/sin guardar). Se usa para que "Nueva Práctica" y "Eliminar Práctica"
+# sepan sobre qué registro operar sin adivinar ni duplicar IDs.
+practica_id_actual: int | None = None
+select_practicas: ui.select | None = None
+input_empresa_ref: ui.input | None = None
+input_periodo_ref: ui.input | None = None
+container_capital_ref: ui.column | None = None
+container_subcuentas_ref: ui.column | None = None
+
 
 # ==========================================
 # 3. FUNCIONES DE BASE DE DATOS (SUPABASE)
@@ -96,31 +108,54 @@ def guardar_practica_supabase(empresa: str, periodo: str) -> int | None:
     return None
 
 
+def _codificar_metadata_cuenta(cuenta: CuentaV3) -> str:
+    """
+    Codifica en la columna 'nif_clasificacion' lo necesario para reconstruir
+    una cuenta DINÁMICA (que no vive en CATALOGO_V3) al recargar una práctica.
+    Las cuentas fijas se resuelven por nombre directo contra el catálogo, así
+    que solo llevan su clasificación como dato informativo.
+    """
+    if obtener_cuenta(cuenta.nombre) is not None:
+        return f"FIJA|{cuenta.clasificacion.value}"
+    if cuenta.clasificacion == Clasificacion.CAPITAL_CONTABLE:
+        reductora = "1" if cuenta.signo == -1 else "0"
+        return f"DYN_CAPITAL|{cuenta.seccion_capital.value}|{reductora}"
+    complementaria = "1" if cuenta.es_complementaria else "0"
+    return f"DYN_BALANCE|{cuenta.clasificacion.value}|{cuenta.nif.etiqueta}|{complementaria}"
+
+
 def guardar_movimientos_supabase(practica_id: int, movimientos_esf: list[MovimientoESF], movimientos_eri: list[MovimientoERI]):
     """Guarda todos los saldos/movimientos de la autoevaluación en Supabase."""
     registros = []
-    
+
     for mov in movimientos_esf:
+        meta = _codificar_metadata_cuenta(mov.cuenta)
         registros.append({
             "practica_id": practica_id,
+            "cuenta": mov.cuenta.nombre,
             "concepto": mov.cuenta.nombre,
             "monto": mov.monto_actual,
-            "tipo": "ESF_ACTUAL"
+            "nif_clasificacion": meta,
+            "tipo": "ESF_ACTUAL",
         })
         if mov.monto_anterior != 0.0:
             registros.append({
                 "practica_id": practica_id,
+                "cuenta": mov.cuenta.nombre,
                 "concepto": mov.cuenta.nombre,
                 "monto": mov.monto_anterior,
-                "tipo": "ESF_ANTERIOR"
+                "nif_clasificacion": meta,
+                "tipo": "ESF_ANTERIOR",
             })
 
     for mov in movimientos_eri:
         registros.append({
             "practica_id": practica_id,
+            "cuenta": mov.cuenta.nombre,
             "concepto": mov.cuenta.nombre,
             "monto": mov.monto,
-            "tipo": "ERI"
+            "nif_clasificacion": f"FIJA|{Clasificacion.RESULTADO.value}",
+            "tipo": "ERI",
         })
 
     if registros:
@@ -129,6 +164,48 @@ def guardar_movimientos_supabase(practica_id: int, movimientos_esf: list[Movimie
             ui.notify("Práctica guardada correctamente en la base de datos.", type="positive")
         except Exception as e:
             ui.notify(f"Error al guardar movimientos en Supabase: {str(e)}", type="negative")
+
+
+def listar_practicas_supabase() -> list[dict]:
+    """Obtiene el historial de prácticas guardadas, más recientes primero."""
+    try:
+        respuesta = (
+            supabase.table("practicas")
+            .select("id, nombre, creado_en")
+            .order("id", desc=True)
+            .execute()
+        )
+        return respuesta.data or []
+    except Exception as e:
+        ui.notify(f"Error al obtener el historial de prácticas: {str(e)}", type="negative")
+        return []
+
+
+def obtener_movimientos_practica_supabase(practica_id: int) -> list[dict]:
+    """Obtiene todos los movimientos financieros guardados de una práctica."""
+    try:
+        respuesta = (
+            supabase.table("movimientos_financieros")
+            .select("*")
+            .eq("practica_id", practica_id)
+            .execute()
+        )
+        return respuesta.data or []
+    except Exception as e:
+        ui.notify(f"Error al cargar los movimientos de la práctica: {str(e)}", type="negative")
+        return []
+
+
+def eliminar_practica_supabase(practica_id: int) -> bool:
+    """Elimina una práctica y sus movimientos asociados en Supabase."""
+    try:
+        # Se borran primero los movimientos por si la FK no tiene ON DELETE CASCADE.
+        supabase.table("movimientos_financieros").delete().eq("practica_id", practica_id).execute()
+        supabase.table("practicas").delete().eq("id", practica_id).execute()
+        return True
+    except Exception as e:
+        ui.notify(f"Error al eliminar práctica en Supabase: {str(e)}", type="negative")
+        return False
 
 
 # ==========================================
@@ -354,21 +431,18 @@ def _render_tab_capital(ec: EstadoCambiosCapital, esf: ResultadoESF):
             ui.table(columns=columnas, rows=filas, row_key="concepto").classes("w-full")
 
 
-def _calcular_y_mostrar(empresa_val: str, periodo_val: str, elaboro_val: str = "", catedratico_val: str = ""):
+def _procesar_y_mostrar(empresa_val: str, periodo_val: str, elaboro_val: str = "", catedratico_val: str = ""):
+    """
+    Calcula los 4 estados financieros a partir de lo capturado EN PANTALLA en
+    este momento y los renderiza. Siempre reconstruye los movimientos desde
+    los widgets actuales (nunca desde una variable en caché), así que no
+    arrastra montos de una ejecución o formulario anterior. Esta función NO
+    toca Supabase: guardar es responsabilidad de quien la llama.
+    """
     global resultados_container
-
-    if _validar_nombres_duplicados(filas_capital_dinamico, "Catálogo Complementario 1 (Capital Contable Dinámico)"):
-        return
-    if _validar_nombres_duplicados(filas_subcuentas_dinamicas, "Catálogo Complementario 2 (Subcuentas de Balance)"):
-        return
 
     movimientos_esf = _construir_movimientos_esf()
     movimientos_eri = _construir_movimientos_eri()
-    
-    # 1. Guardar en Supabase
-    practica_id = guardar_practica_supabase(empresa_val, periodo_val)
-    if practica_id:
-        guardar_movimientos_supabase(practica_id, movimientos_esf, movimientos_eri)
 
     # 2. Cálculos NIF
     resultado_eri = calcular_eri(movimientos_eri)
@@ -446,6 +520,42 @@ def _calcular_y_mostrar(empresa_val: str, periodo_val: str, elaboro_val: str = "
             ):
                 ui.label(f"Elaboró (Alumno): {elaboro_val or '—'}").classes("font-medium")
                 ui.label(f"Catedrático / Maestro: {catedratico_val or '—'}").classes("font-medium")
+
+
+def _calcular_y_mostrar(empresa_val: str, periodo_val: str, elaboro_val: str = "", catedratico_val: str = ""):
+    """Handler del botón 'Calcular Estados Financieros': valida, bloquea el
+    cálculo si no hay nada capturado, guarda en Supabase y solo entonces
+    delega el cálculo/renderizado a _procesar_y_mostrar()."""
+    global practica_id_actual
+
+    if _validar_nombres_duplicados(filas_capital_dinamico, "Catálogo Complementario 1 (Capital Contable Dinámico)"):
+        return
+    if _validar_nombres_duplicados(filas_subcuentas_dinamicas, "Catálogo Complementario 2 (Subcuentas de Balance)"):
+        return
+
+    # _construir_movimientos_esf()/_eri() ya ignoran cualquier cuenta en
+    # $0.00 / vacía / None (ver el filtro `if monto_actual != 0.0 or ...`),
+    # así que si el formulario está vacío estas dos listas vienen vacías.
+    movimientos_esf = _construir_movimientos_esf()
+    movimientos_eri = _construir_movimientos_eri()
+
+    if not movimientos_esf and not movimientos_eri:
+        ui.notify(
+            "Por favor ingresa al menos un movimiento contable antes de calcular.",
+            type="warning",
+        )
+        return  # no se guarda nada en Supabase ni se muestra ningún estado
+
+    # 1. Guardar en Supabase (solo si hay algo real que guardar)
+    practica_id = guardar_practica_supabase(empresa_val, periodo_val)
+    if practica_id:
+        guardar_movimientos_supabase(practica_id, movimientos_esf, movimientos_eri)
+        practica_id_actual = practica_id
+        if select_practicas is not None:
+            _refrescar_selector_practicas(seleccionar_id=practica_id)
+
+    # 2. Calcular y renderizar
+    _procesar_y_mostrar(empresa_val, periodo_val, elaboro_val, catedratico_val)
 
 
 def _build_captura_cuentas_fijas():
@@ -535,11 +645,224 @@ def _agregar_fila_subcuenta_dinamica():
 
 
 # ==========================================
+# 5b. HISTORIAL DE PRÁCTICAS (Supabase: cargar / nueva / eliminar)
+# ==========================================
+def _reiniciar_formulario(mantener_datos_generales: bool = False):
+    """
+    Limpia el formulario a su estado inicial: cuentas fijas en 0.0, quita
+    TODAS las filas dinámicas capturadas y deja una fila en blanco por cada
+    catálogo complementario. No toca practica_id_actual (eso lo deciden
+    _nueva_practica / _cargar_practica_seleccionada).
+    """
+    for inp_act, inp_ant in inputs_cuentas_fijas.values():
+        inp_act.set_value(0.0)
+        inp_ant.set_value(0.0)
+
+    filas_capital_dinamico.clear()
+    if container_capital_ref is not None:
+        container_capital_ref.clear()
+        with container_capital_ref:
+            _agregar_fila_capital_dinamico()
+
+    filas_subcuentas_dinamicas.clear()
+    if container_subcuentas_ref is not None:
+        container_subcuentas_ref.clear()
+        with container_subcuentas_ref:
+            _agregar_fila_subcuenta_dinamica()
+
+    if not mantener_datos_generales:
+        if input_empresa_ref is not None:
+            input_empresa_ref.set_value("Empresa Demo S.A.")
+        if input_periodo_ref is not None:
+            input_periodo_ref.set_value("Del 1 de enero al 31 de diciembre de 2025")
+
+    if resultados_container is not None:
+        resultados_container.clear()
+
+
+def _buscar_o_crear_fila_capital(nombre: str, seccion_val: str, reductora: bool) -> CapitalDinamicaRow:
+    """Reutiliza la fila si ya existe una con ese nombre (para juntar
+    Año Actual/Año Anterior que llegan en dos registros separados de
+    Supabase); si no, usa una fila en blanco o crea una nueva."""
+    for fila in filas_capital_dinamico:
+        if (fila.nombre_input.value or "").strip() == nombre:
+            return fila
+    for fila in filas_capital_dinamico:
+        if not (fila.nombre_input.value or "").strip():
+            fila.nombre_input.set_value(nombre)
+            fila.seccion_select.set_value(seccion_val)
+            fila.reductora_check.set_value(reductora)
+            return fila
+    if container_capital_ref is not None:
+        with container_capital_ref:
+            _agregar_fila_capital_dinamico()
+    fila = filas_capital_dinamico[-1]
+    fila.nombre_input.set_value(nombre)
+    fila.seccion_select.set_value(seccion_val)
+    fila.reductora_check.set_value(reductora)
+    return fila
+
+
+def _buscar_o_crear_fila_subcuenta(nombre: str, clasif_val: str, nif_etiqueta: str, complementaria: bool) -> SubcuentaDinamicaRow:
+    for fila in filas_subcuentas_dinamicas:
+        if (fila.nombre_input.value or "").strip() == nombre:
+            return fila
+    fila_libre = None
+    for fila in filas_subcuentas_dinamicas:
+        if not (fila.nombre_input.value or "").strip():
+            fila_libre = fila
+            break
+    if fila_libre is None:
+        if container_subcuentas_ref is not None:
+            with container_subcuentas_ref:
+                _agregar_fila_subcuenta_dinamica()
+        fila_libre = filas_subcuentas_dinamicas[-1]
+
+    fila_libre.nombre_input.set_value(nombre)
+    fila_libre.clasificacion_select.set_value(clasif_val)
+    opciones = NIF_POR_CLASIFICACION_CASCADA.get(clasif_val, [])
+    fila_libre.nif_select.set_options([op[0] for op in opciones])
+    fila_libre.nif_select.set_value(nif_etiqueta)
+    fila_libre.complementaria_check.set_value(complementaria)
+    return fila_libre
+
+
+def _refrescar_selector_practicas(seleccionar_id: int | None = None):
+    """Vuelve a consultar Supabase y repuebla el <select> de prácticas."""
+    if select_practicas is None:
+        return
+    practicas = listar_practicas_supabase()
+    opciones = {p["id"]: f"#{p['id']} — {p.get('nombre', '')} ({str(p.get('creado_en', ''))[:10]})" for p in practicas}
+    select_practicas.set_options(opciones)
+    if seleccionar_id is not None and seleccionar_id in opciones:
+        select_practicas.set_value(seleccionar_id)
+    elif practicas:
+        select_practicas.set_value(practicas[0]["id"])
+    else:
+        select_practicas.set_value(None)
+
+
+def _nueva_practica():
+    """Botón 'Nueva Práctica': limpia el formulario para capturar desde cero
+    SIN sobreescribir ni borrar la práctica que estaba cargada; simplemente
+    deja de estar 'activa' (practica_id_actual = None) para que el próximo
+    Calcular inserte un registro nuevo en vez de confundirse con el anterior."""
+    global practica_id_actual
+    practica_id_actual = None
+    _reiniciar_formulario()
+    if select_practicas is not None:
+        select_practicas.set_value(None)
+    ui.notify("Formulario listo para una nueva práctica en blanco.", type="info")
+
+
+def _cargar_practica_seleccionada():
+    """Botón 'Cargar Práctica': trae los movimientos de la práctica elegida
+    en el selector, repuebla el formulario y muestra sus 4 estados
+    financieros (sin volver a guardar nada en Supabase)."""
+    global practica_id_actual
+
+    if select_practicas is None or select_practicas.value is None:
+        ui.notify("Selecciona primero una práctica de la lista.", type="warning")
+        return
+
+    practica_id = int(select_practicas.value)
+    filas_db = obtener_movimientos_practica_supabase(practica_id)
+    if not filas_db:
+        ui.notify("Esa práctica no tiene movimientos guardados.", type="warning")
+        return
+
+    _reiniciar_formulario(mantener_datos_generales=True)
+
+    for fila in filas_db:
+        cuenta_nombre = fila.get("cuenta") or fila.get("concepto") or ""
+        if not cuenta_nombre:
+            continue
+        monto = float(fila.get("monto") or 0.0)
+        tipo = fila.get("tipo")
+        meta = fila.get("nif_clasificacion") or ""
+
+        if tipo == "ERI":
+            if cuenta_nombre in inputs_cuentas_fijas:
+                inp_act, _ = inputs_cuentas_fijas[cuenta_nombre]
+                inp_act.set_value(monto)
+            continue
+
+        if cuenta_nombre in inputs_cuentas_fijas:
+            inp_act, inp_ant = inputs_cuentas_fijas[cuenta_nombre]
+            if tipo == "ESF_ACTUAL":
+                inp_act.set_value(monto)
+            elif tipo == "ESF_ANTERIOR":
+                inp_ant.set_value(monto)
+            continue
+
+        partes = meta.split("|")
+        origen = partes[0] if partes else ""
+
+        if origen == "DYN_CAPITAL":
+            seccion_val = partes[1] if len(partes) > 1 else SeccionCapital.CAPITAL_CONTRIBUIDO.value
+            reductora = len(partes) > 2 and partes[2] == "1"
+            fila_ui = _buscar_o_crear_fila_capital(cuenta_nombre, seccion_val, reductora)
+            if tipo == "ESF_ACTUAL":
+                fila_ui.actual_input.set_value(monto)
+            elif tipo == "ESF_ANTERIOR":
+                fila_ui.anterior_input.set_value(monto)
+
+        elif origen == "DYN_BALANCE":
+            clasif_val = partes[1] if len(partes) > 1 else Clasificacion.ACTIVO_CIRCULANTE.value
+            nif_etq = partes[2] if len(partes) > 2 else NIF.EQUIVALENTES_EFECTIVO.value[0]
+            complementaria = len(partes) > 3 and partes[3] == "1"
+            fila_ui = _buscar_o_crear_fila_subcuenta(cuenta_nombre, clasif_val, nif_etq, complementaria)
+            if tipo == "ESF_ACTUAL":
+                fila_ui.actual_input.set_value(monto)
+            elif tipo == "ESF_ANTERIOR":
+                fila_ui.anterior_input.set_value(monto)
+        # Metadata desconocida/corrupta: se ignora esa fila en vez de romper la carga.
+
+    practica_id_actual = practica_id
+    ui.notify(f"Práctica #{practica_id} cargada. Calculando estados financieros...", type="positive")
+    _procesar_y_mostrar(
+        input_empresa_ref.value if input_empresa_ref is not None else "",
+        input_periodo_ref.value if input_periodo_ref is not None else "",
+    )
+
+
+def _eliminar_practica_seleccionada():
+    """Botón 'Eliminar Práctica': pide confirmación y, si se confirma, borra
+    la práctica (y sus movimientos) de Supabase y refresca el selector."""
+    global practica_id_actual
+
+    if select_practicas is None or select_practicas.value is None:
+        ui.notify("Selecciona primero una práctica de la lista.", type="warning")
+        return
+    practica_id = int(select_practicas.value)
+
+    with ui.dialog() as dialog, ui.card():
+        ui.label(f"¿Eliminar la práctica #{practica_id} de forma permanente?").classes("text-md font-bold")
+        ui.label("Esta acción no se puede deshacer.").classes("text-sm text-gray-500")
+        with ui.row().classes("w-full justify-end gap-2 mt-4"):
+            ui.button("Cancelar", on_click=dialog.close).props("flat")
+
+            def _confirmar_eliminacion():
+                global practica_id_actual
+                if eliminar_practica_supabase(practica_id):
+                    ui.notify(f"Práctica #{practica_id} eliminada.", type="positive")
+                    if practica_id_actual == practica_id:
+                        practica_id_actual = None
+                    _refrescar_selector_practicas()
+                dialog.close()
+
+            ui.button("Eliminar", on_click=_confirmar_eliminacion).props("color=negative")
+    dialog.open()
+
+
+# ==========================================
 # 6. PÁGINA PRINCIPAL
 # ==========================================
 @ui.page("/")
 def pagina_principal():
-    global resultados_container
+    global resultados_container, select_practicas
+    global input_empresa_ref, input_periodo_ref
+    global container_capital_ref, container_subcuentas_ref
 
     # Membrete institucional UANL / FACPYA (discreto, arriba del dashboard)
     with ui.row().classes(
@@ -557,7 +880,20 @@ def pagina_principal():
     ):
         ui.label("SuiteContable NIF V3 — FACPYA").classes("text-2xl font-bold")
         ui.label("Autoevaluación Financiera").classes("text-md opacity-80")
-    
+
+    # Historial de Prácticas (Supabase): cargar / nueva / eliminar
+    with ui.card().classes("w-full mb-4 border-l-4 border-[#F2A900]"):
+        ui.label("Historial de Prácticas").classes("text-lg font-bold text-[#002F6C]")
+        with ui.row().classes("w-full items-center gap-2"):
+            select_practicas = ui.select(options={}, label="Prácticas guardadas").classes("w-96")
+            ui.button("Cargar Práctica", icon="folder_open", on_click=_cargar_practica_seleccionada) \
+                .classes("bg-[#002F6C] hover:bg-[#013a85] text-white font-bold")
+            ui.button("Nueva Práctica", icon="add", on_click=_nueva_practica) \
+                .classes("bg-gray-700 hover:bg-gray-800 text-white font-bold")
+            ui.button("Eliminar Práctica", icon="delete", on_click=_eliminar_practica_seleccionada) \
+                .classes("bg-red-700 hover:bg-red-800 text-white font-bold")
+    _refrescar_selector_practicas()
+
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
         ui.label("Datos Generales").classes("text-lg font-bold text-gray-800")
         with ui.row().classes("gap-4"):
@@ -566,6 +902,8 @@ def pagina_principal():
         with ui.row().classes("gap-4"):
             input_periodo = ui.input(label="Periodo actual", value="Del 1 de enero al 31 de diciembre de 2025").classes("w-80")
             ui.input(label="Periodo anterior", value="Al 31 de diciembre de 2024").classes("w-80")
+        input_empresa_ref = input_empresa
+        input_periodo_ref = input_periodo
 
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
         ui.label("Catálogo de Cuentas Fijo (CATALOGO_V3)").classes("text-lg font-bold text-gray-800")
@@ -578,6 +916,7 @@ def pagina_principal():
         with container_subcuentas:
             _agregar_fila_subcuenta_dinamica()
         ui.button("+ Agregar subcuenta de balance", on_click=_agregar_fila_subcuenta_dinamica).classes("bg-gray-700 text-white")
+        container_subcuentas_ref = container_subcuentas
 
     with ui.card().classes("w-full mb-4 border-l-4 border-gray-600"):
         ui.label("Catálogo Complementario 1: Capital Contable Dinámico").classes("text-lg font-bold text-gray-800")
@@ -586,6 +925,7 @@ def pagina_principal():
         with container_capital:
             _agregar_fila_capital_dinamico()
         ui.button("+ Agregar cuenta de capital", on_click=_agregar_fila_capital_dinamico).classes("bg-gray-700 text-white")
+        container_capital_ref = container_capital
 
     with ui.card().classes("w-full mb-4 border-l-4 border-[#F2A900]"):
         ui.label("Datos Académicos").classes("text-lg font-bold text-[#002F6C]")
