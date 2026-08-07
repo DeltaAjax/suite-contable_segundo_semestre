@@ -715,12 +715,15 @@ def _render_tab_esf_avanzado(esf: ResultadoESF) -> None:
 
         def _agregar_seccion(titulo: str, rubros: list, total_act: float, total_ant: float) -> None:
             filas.append({"concepto": f"=== {titulo.upper()} ===", "actual": "", "anterior": ""})
-            for r in rubros:
-                filas.append({
-                    "concepto": f"  {r.nif.etiqueta}",
-                    "actual": formatear_moneda(r.saldo_actual),
-                    "anterior": formatear_moneda(r.saldo_anterior),
-                })
+            if not rubros:
+                filas.append({"concepto": "  (Sin movimientos capturados)", "actual": "$0.00", "anterior": "$0.00"})
+            else:
+                for r in rubros:
+                    filas.append({
+                        "concepto": f"  {r.nif.etiqueta}",
+                        "actual": formatear_moneda(r.saldo_actual),
+                        "anterior": formatear_moneda(r.saldo_anterior),
+                    })
             filas.append({
                 "concepto": f"Total {titulo}",
                 "actual": formatear_moneda(total_act),
@@ -822,10 +825,9 @@ def _render_tab_capital(estado_cambios: EstadoCambiosCapital) -> None:
 
 
 # ---------------------------------------------------------------------------
-# MÓDULO DE AUDITORÍA NIF (INDEPENDIENTE)
+# MÓDULO DE AUDITORÍA NIF (INDEPENDIENTE CON BOTÓN VISIBLE)
 # ---------------------------------------------------------------------------
 def build_auditoria_nif_independiente() -> None:
-    """Módulo 100% independiente para Auditoría de Activos y Pasivos NIF."""
     with ui.card().classes("w-full shadow-lg p-6 border-t-4 border-[#800000] mb-8"):
         ui.label("Módulo de Auditoría Técnica y Cálculos Auxiliares (NIF C-6 y NIF C-19)").classes(
             f"text-xl font-bold text-[{COLOR_GUINDA}]"
@@ -851,11 +853,21 @@ def build_auditoria_nif_independiente() -> None:
                         residual_dep = ui.number(label="Valor residual ($)", value=10000.0, format="%.2f", min=0).classes("w-1/4 bg-white px-2 rounded")
                         vida_dep = ui.number(label="Vida útil (años)", value=5, format="%.0f", min=1, step=1).classes("w-1/6 bg-white px-2 rounded")
 
-                    metodo_dep = ui.select(
-                        label="Método de Depreciación",
-                        options=["Línea Recta", "Suma de Dígitos", "Unidades de Producción", "Saldos Decrecientes"],
-                        value="Línea Recta"
-                    ).classes("w-1/3 bg-white px-2 rounded mt-2")
+                    with ui.row().classes("w-full gap-4 items-center mt-2"):
+                        metodo_dep = ui.select(
+                            label="Método de Depreciación",
+                            options=["Línea Recta", "Suma de Dígitos", "Unidades de Producción", "Saldos Decrecientes"],
+                            value="Línea Recta"
+                        ).classes("w-1/3 bg-white px-2 rounded")
+
+                        ui.button(
+                            "Calcular Tabla de Depreciación",
+                            on_click=lambda: _calcular_depreciacion(
+                                concepto_dep, costo_dep, residual_dep, vida_dep,
+                                metodo_dep, capacidad_dep, tipo_unidad_dep, usos_dep,
+                                contenedor_resultados_dep
+                            )
+                        ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold px-6 py-2 rounded shadow ml-auto")
 
                     with ui.column().classes("w-full mt-2") as col_unidades:
                         ui.label("Configuración para Unidades de Producción").classes("font-semibold text-sm text-gray-700")
@@ -877,17 +889,8 @@ def build_auditoria_nif_independiente() -> None:
                     metodo_dep.on("update:model-value", toggle_unidades)
                     toggle_unidades()
 
-                    ui.button(
-                        "Calcular Tabla de Depreciación",
-                        on_click=lambda: _calcular_depreciacion(
-                            concepto_dep, costo_dep, residual_dep, vida_dep,
-                            metodo_dep, capacidad_dep, tipo_unidad_dep, usos_dep,
-                            contenedor_resultados_dep
-                        )
-                    ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-4 px-6 py-2 rounded shadow")
-
                 with contenedor_resultados_dep:
-                    ui.label("Ingresa los datos arriba y presiona 'Calcular Tabla de Depreciación'").classes("text-gray-400 text-sm italic p-4")
+                    ui.label("Presiona 'Calcular Tabla de Depreciación' para desplegar la tabla").classes("text-gray-400 text-sm italic p-4")
 
             # --- TAB AMORTIZACIÓN ---
             with ui.tab_panel(tab_amortizacion):
@@ -928,23 +931,24 @@ def build_auditoria_nif_independiente() -> None:
                         plazo_amort = ui.number(label="Plazo (años)", value=5, format="%.0f", min=1, step=1).classes("w-1/5 bg-white px-2 rounded")
                         gracia_amort = ui.number(label="Periodos de gracia", value=0, format="%.0f", min=0, step=1).classes("w-1/5 bg-white px-2 rounded")
 
-                    metodo_amort = ui.select(
-                        label="Método de extinción",
-                        options=["Capital Fijo", "Pago al Vencimiento"],
-                        value="Capital Fijo"
-                    ).classes("w-1/3 bg-white px-2 rounded mt-2")
+                    with ui.row().classes("w-full gap-4 items-center mt-2"):
+                        metodo_amort = ui.select(
+                            label="Método de extinción",
+                            options=["Capital Fijo", "Pago al Vencimiento"],
+                            value="Capital Fijo"
+                        ).classes("w-1/3 bg-white px-2 rounded")
 
-                    ui.button(
-                        "Generar Tabla de Amortización",
-                        on_click=lambda: _calcular_amortizacion(
-                            concepto_amort, valor_total_amort, tasa_amort,
-                            pagos_anio_amort, plazo_amort, gracia_amort, metodo_amort,
-                            contenedor_resultados_amort
-                        )
-                    ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold mt-4 px-6 py-2 rounded shadow")
+                        ui.button(
+                            "Generar Tabla de Amortización",
+                            on_click=lambda: _calcular_amortizacion(
+                                concepto_amort, valor_total_amort, tasa_amort,
+                                pagos_anio_amort, plazo_amort, gracia_amort, metodo_amort,
+                                contenedor_resultados_amort
+                            )
+                        ).classes(f"bg-[{COLOR_GUINDA}] hover:bg-[{COLOR_GUINDA_OSCURO}] text-white font-bold px-6 py-2 rounded shadow ml-auto")
 
                 with contenedor_resultados_amort:
-                    ui.label("Ingresa los datos arriba y presiona 'Generar Tabla de Amortización'").classes("text-gray-400 text-sm italic p-4")
+                    ui.label("Presiona 'Generar Tabla de Amortización' para desplegar la tabla").classes("text-gray-400 text-sm italic p-4")
 
 
 def _calcular_depreciacion(
@@ -1175,10 +1179,6 @@ def _calcular_y_mostrar_avanzado(estado: EstadoSesion, empresa_val: str, periodo
 
     movimientos_esf = _construir_movimientos_esf_avanzado(estado)
     movimientos_eri = _construir_movimientos_eri_avanzado(estado)
-
-    if not movimientos_esf and not movimientos_eri:
-        ui.notify("Por favor ingresa al menos un movimiento contable antes de calcular.", type="warning")
-        return
 
     _procesar_y_mostrar_avanzado(estado, empresa_val, periodo_val, elaboro_val, catedratico_val)
 
