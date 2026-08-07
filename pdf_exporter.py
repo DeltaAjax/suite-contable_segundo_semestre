@@ -4,43 +4,9 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.graphics.shapes import Drawing, Circle, Ellipse, Path
 from engine import ResultadoESF, ResultadoERI, formatear_moneda
 from capital_contable import EstadoCambiosCapital
 from flujo_efectivo import ResultadoFlujoEfectivo
-
-
-def _emblema_elefante(tamano: float = 34) -> Drawing:
-    """
-    Emblema institucional vectorial (carita estilizada de elefante, de
-    frente: orejas + cabeza + trompa) dibujado con formas de
-    reportlab.graphics — sin depender de ningún archivo de imagen externo.
-    Se pinta en guinda (#800000) sobre fondo blanco.
-    """
-    d = Drawing(tamano, tamano)
-    e = tamano / 64.0
-    guinda = colors.HexColor('#800000')
-
-    # Orejas (detrás de la cabeza)
-    d.add(Circle(14 * e, 40 * e, 11 * e, fillColor=guinda, strokeColor=None))
-    d.add(Circle(50 * e, 40 * e, 11 * e, fillColor=guinda, strokeColor=None))
-    # Cabeza (encima de las orejas)
-    d.add(Circle(32 * e, 42 * e, 15 * e, fillColor=guinda, strokeColor=None))
-
-    # Trompa
-    trompa = Path(fillColor=guinda, strokeColor=None)
-    trompa.moveTo(27 * e, 30 * e)
-    trompa.curveTo(23 * e, 21 * e, 24 * e, 13 * e, 31 * e, 11 * e)
-    trompa.curveTo(35 * e, 10 * e, 38 * e, 13 * e, 35 * e, 17 * e)
-    trompa.curveTo(32 * e, 20 * e, 32 * e, 25 * e, 36 * e, 30 * e)
-    trompa.closePath()
-    d.add(trompa)
-
-    # Ojos (blancos, sobre la cabeza guinda)
-    d.add(Circle(25 * e, 45 * e, 1.8 * e, fillColor=colors.white, strokeColor=None))
-    d.add(Circle(39 * e, 45 * e, 1.8 * e, fillColor=colors.white, strokeColor=None))
-
-    return d
 
 def generar_pdf_estados_financieros(
     empresa: str,
@@ -77,18 +43,9 @@ def generar_pdf_estados_financieros(
     elements = []
 
     def _encabezado(titulo_reporte: str):
-        texto_encabezado = [
-            Paragraph(f"<b>{empresa}</b>", title_style),
-            Paragraph(f"{titulo_reporte}", subtitle_style),
-            Paragraph(f"{periodo}", subtitle_style),
-        ]
-        tabla_encabezado = Table([[_emblema_elefante(), texto_encabezado]], colWidths=[50, 470])
-        tabla_encabezado.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-            ('LEFTPADDING', (0, 0), (0, 0), 0),
-        ]))
-        elements.append(tabla_encabezado)
+        elements.append(Paragraph(f"<b>{empresa}</b>", title_style))
+        elements.append(Paragraph(f"{titulo_reporte}", subtitle_style))
+        elements.append(Paragraph(f"{periodo}", subtitle_style))
         elements.append(Spacer(1, 15))
 
     # --- 1. ESF ---

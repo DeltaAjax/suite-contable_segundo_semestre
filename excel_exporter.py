@@ -32,9 +32,7 @@ def generar_excel_estados_financieros(esf, eri, flujo_indirecto, estado_cambios,
         ws.merge_cells(f"A2:{col_fin}2")
         ws.merge_cells(f"A3:{col_fin}3")
         
-        # Emblema institucional: carácter vectorial estilizado (silueta de
-        # elefante) integrado en el título, sin depender de imagen externa.
-        ws["A1"] = f"\U0001F418  {empresa}"
+        ws["A1"] = empresa
         ws["A2"] = titulo_reporte
         ws["A3"] = periodo
         

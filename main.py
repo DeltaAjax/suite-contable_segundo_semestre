@@ -51,24 +51,6 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Ícono institucional (silueta de elefante) como SVG vectorial embebido,
-# construido con formas básicas: no depende de ningún archivo de imagen
-# externo y se pinta en blanco sobre el guinda del encabezado.
-ICONO_ELEFANTE_SVG = """
-<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-  <g fill="#FFFFFF">
-    <circle cx="22" cy="18" r="9"/>
-    <ellipse cx="34" cy="30" rx="20" ry="15"/>
-    <path d="M15 30 q-7 2-7 10 q0 6 6 6 q4 0 4-5 q0-6-3-11 Z"/>
-    <path d="M20 42 q-2 6 -2 10 q0 2 2 2 q2 0 2-2 l1-9 Z"/>
-    <path d="M30 43 q-1 6 -1 9 q0 2 2 2 q2 0 2-2 l0-9 Z"/>
-    <path d="M40 43 q-1 6 -1 9 q0 2 2 2 q2 0 2-2 l0-9 Z"/>
-    <path d="M50 42 q1 6 1 9 q0 2-2 2 q-2 0-2-2 l-1-9 Z"/>
-  </g>
-  <circle cx="19" cy="16" r="1.4" fill="#800000"/>
-</svg>
-"""
-
 
 # ==========================================
 # 2. ESTRUCTURAS DE DATOS DE LA INTERFAZ
@@ -896,9 +878,7 @@ def pagina_principal():
         "w-full bg-[#800000] text-white p-4 mb-6 items-center justify-between "
         "shadow-md border-b-4 border-[#F2A900]"
     ):
-        with ui.row().classes("items-center gap-3"):
-            ui.html(ICONO_ELEFANTE_SVG).classes("w-10 h-10")
-            ui.label("SuiteContable NIF V3 — FACPYA").classes("text-2xl font-bold")
+        ui.label("SuiteContable NIF V3 — FACPYA").classes("text-2xl font-bold")
         ui.label("Autoevaluación Financiera").classes("text-md opacity-80")
 
     # Historial de Prácticas (Supabase): cargar / nueva / eliminar
