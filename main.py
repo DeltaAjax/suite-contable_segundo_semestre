@@ -51,6 +51,24 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Ícono institucional (silueta de elefante) como SVG vectorial embebido,
+# construido con formas básicas: no depende de ningún archivo de imagen
+# externo y se pinta en blanco sobre el guinda del encabezado.
+ICONO_ELEFANTE_SVG = """
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <g fill="#FFFFFF">
+    <circle cx="22" cy="18" r="9"/>
+    <ellipse cx="34" cy="30" rx="20" ry="15"/>
+    <path d="M15 30 q-7 2-7 10 q0 6 6 6 q4 0 4-5 q0-6-3-11 Z"/>
+    <path d="M20 42 q-2 6 -2 10 q0 2 2 2 q2 0 2-2 l1-9 Z"/>
+    <path d="M30 43 q-1 6 -1 9 q0 2 2 2 q2 0 2-2 l0-9 Z"/>
+    <path d="M40 43 q-1 6 -1 9 q0 2 2 2 q2 0 2-2 l0-9 Z"/>
+    <path d="M50 42 q1 6 1 9 q0 2-2 2 q-2 0-2-2 l-1-9 Z"/>
+  </g>
+  <circle cx="19" cy="16" r="1.4" fill="#800000"/>
+</svg>
+"""
+
 
 # ==========================================
 # 2. ESTRUCTURAS DE DATOS DE LA INTERFAZ
@@ -382,7 +400,7 @@ def _render_tab_eri(eri: ResultadoERI):
 def _render_tab_flujo(indirecto: ResultadoFlujoEfectivo, directo: ResultadoFlujoEfectivo):
     with ui.column().classes("w-full gap-4"):
         for metodo, resultado in [("INDIRECTO", indirecto), ("DIRECTO", directo)]:
-            ui.label(f"Método {metodo}").classes("text-lg font-bold text-[#002F6C]")
+            ui.label(f"Método {metodo}").classes("text-lg font-bold text-[#800000]")
             columnas = [
                 {"name": "concepto", "label": "Concepto", "field": "concepto", "align": "left"},
                 {"name": "monto", "label": "Monto", "field": "monto", "align": "right"},
@@ -490,12 +508,12 @@ def _procesar_y_mostrar(empresa_val: str, periodo_val: str, elaboro_val: str = "
                 ui.download(excel_bytes, filename="Estados_Financieros_NIF.xlsx")
 
             with ui.row().classes("w-full justify-between items-center mb-4 border-b border-gray-300 pb-2"):
-                ui.label("Reportes Financieros Generados").classes("text-xl font-bold text-[#002F6C]")
+                ui.label("Reportes Financieros Generados").classes("text-xl font-bold text-[#800000]")
                 with ui.row().classes("gap-2"):
                     ui.button("Exportar Excel (.xlsx)", on_click=_descargar_excel, icon="download").classes("bg-green-700 hover:bg-green-800 text-white font-bold px-4 py-2 rounded")
                     ui.button("Descargar PDF (Opcional)", on_click=_descargar_pdf).classes("bg-gray-700 hover:bg-gray-800 text-white font-bold px-4 py-2 rounded")
 
-            tabs = ui.tabs().classes("text-[#002F6C]").props('indicator-color=amber-9 active-color="#002F6C"')
+            tabs = ui.tabs().classes("text-[#800000]").props('indicator-color=amber-9 active-color="#800000"')
             with tabs:
                 t1 = ui.tab("ESF")
                 t2 = ui.tab("ERI")
@@ -563,8 +581,8 @@ def _build_captura_cuentas_fijas():
         cuentas = listar_cuentas_por_clasificacion(clasif)
         if not cuentas:
             continue
-        with ui.card().classes("w-full border-l-4 border-[#002F6C]"):
-            ui.label(clasif.value).classes("text-md font-bold text-[#002F6C]")
+        with ui.card().classes("w-full border-l-4 border-[#800000]"):
+            ui.label(clasif.value).classes("text-md font-bold text-[#800000]")
             for cuenta in cuentas:
                 with ui.row().classes("w-full items-center gap-4"):
                     ui.label(cuenta.nombre).classes("w-64 text-sm text-gray-700")
@@ -866,7 +884,7 @@ def pagina_principal():
 
     # Membrete institucional UANL / FACPYA (discreto, arriba del dashboard)
     with ui.row().classes(
-        "w-full bg-white text-[#002F6C] px-4 py-1 items-center justify-center "
+        "w-full bg-white text-[#800000] px-4 py-1 items-center justify-center "
         "border-b-2 border-[#F2A900]"
     ):
         ui.label(
@@ -875,19 +893,21 @@ def pagina_principal():
 
     # Encabezado principal FACPYA
     with ui.row().classes(
-        "w-full bg-[#002F6C] text-white p-4 mb-6 items-center justify-between "
+        "w-full bg-[#800000] text-white p-4 mb-6 items-center justify-between "
         "shadow-md border-b-4 border-[#F2A900]"
     ):
-        ui.label("SuiteContable NIF V3 — FACPYA").classes("text-2xl font-bold")
+        with ui.row().classes("items-center gap-3"):
+            ui.html(ICONO_ELEFANTE_SVG).classes("w-10 h-10")
+            ui.label("SuiteContable NIF V3 — FACPYA").classes("text-2xl font-bold")
         ui.label("Autoevaluación Financiera").classes("text-md opacity-80")
 
     # Historial de Prácticas (Supabase): cargar / nueva / eliminar
     with ui.card().classes("w-full mb-4 border-l-4 border-[#F2A900]"):
-        ui.label("Historial de Prácticas").classes("text-lg font-bold text-[#002F6C]")
+        ui.label("Historial de Prácticas").classes("text-lg font-bold text-[#800000]")
         with ui.row().classes("w-full items-center gap-2"):
             select_practicas = ui.select(options={}, label="Prácticas guardadas").classes("w-96")
             ui.button("Cargar Práctica", icon="folder_open", on_click=_cargar_practica_seleccionada) \
-                .classes("bg-[#002F6C] hover:bg-[#013a85] text-white font-bold")
+                .classes("bg-[#800000] hover:bg-[#600000] text-white font-bold")
             ui.button("Nueva Práctica", icon="add", on_click=_nueva_practica) \
                 .classes("bg-gray-700 hover:bg-gray-800 text-white font-bold")
             ui.button("Eliminar Práctica", icon="delete", on_click=_eliminar_practica_seleccionada) \
@@ -928,7 +948,7 @@ def pagina_principal():
         container_capital_ref = container_capital
 
     with ui.card().classes("w-full mb-4 border-l-4 border-[#F2A900]"):
-        ui.label("Datos Académicos").classes("text-lg font-bold text-[#002F6C]")
+        ui.label("Datos Académicos").classes("text-lg font-bold text-[#800000]")
         with ui.row().classes("gap-4"):
             input_elaboro = ui.input(label="Elaboró (Alumno)", value="").classes("w-64")
             input_catedratico = ui.input(label="Catedrático / Maestro", value="").classes("w-64")
@@ -939,7 +959,7 @@ def pagina_principal():
         on_click=lambda: _calcular_y_mostrar(
             input_empresa.value, input_periodo.value, input_elaboro.value, input_catedratico.value
         )
-    ).classes("text-lg bg-[#002F6C] hover:bg-[#013a85] text-white font-bold my-6 w-full py-3 shadow-lg border-b-4 border-[#F2A900]")
+    ).classes("text-lg bg-[#800000] hover:bg-[#600000] text-white font-bold my-6 w-full py-3 shadow-lg border-b-4 border-[#F2A900]")
 
     resultados_container = ui.column().classes("w-full")
 

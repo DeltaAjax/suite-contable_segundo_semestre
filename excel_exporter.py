@@ -21,8 +21,8 @@ def generar_excel_estados_financieros(esf, eri, flujo_indirecto, estado_cambios,
     align_right = Alignment(horizontal="right", vertical="center")
     align_left = Alignment(horizontal="left", vertical="center")
     
-    border_thin = Border(bottom=Side(style="thin", color="D3D3D3"))
-    border_total = Border(top=Side(style="thin", color="000000"), bottom=Side(style="double", color="000000"))
+    border_thin = Border(bottom=Side(style="thin", color="D9B8B8"))  # guinda suave
+    border_total = Border(top=Side(style="thin", color="800000"), bottom=Side(style="double", color="800000"))
     
     fmt_moneda = '"$"#,##0.00;("$"#,##0.00);"-"'
 
@@ -32,7 +32,9 @@ def generar_excel_estados_financieros(esf, eri, flujo_indirecto, estado_cambios,
         ws.merge_cells(f"A2:{col_fin}2")
         ws.merge_cells(f"A3:{col_fin}3")
         
-        ws["A1"] = empresa
+        # Emblema institucional: carácter vectorial estilizado (silueta de
+        # elefante) integrado en el título, sin depender de imagen externa.
+        ws["A1"] = f"\U0001F418  {empresa}"
         ws["A2"] = titulo_reporte
         ws["A3"] = periodo
         
